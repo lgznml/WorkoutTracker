@@ -8,7 +8,7 @@ from datetime import datetime
 st.set_page_config(page_title="Workout Tracker", page_icon="💪", layout="wide")
 
 # Inizializzazione dati
-GIORNI = ["Martedì", "Giovedì", "Venerdì", "Sabato", "Domenica"]
+GIORNI = ["Lunedì", "Martedì", "Mercoleì", "Giovedì", "Venerdì", "Sabato", "Domenica"]
 SETTIMANE = 6
 
 def init_session_state():
