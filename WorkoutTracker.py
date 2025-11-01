@@ -3,6 +3,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import json
 from datetime import datetime, date
+from google.oauth2.service_account import Credentials
+import gspread
 
 # Configurazione pagina
 st.set_page_config(page_title="Workout Tracker", page_icon="💪", layout="wide")
@@ -10,43 +12,188 @@ st.set_page_config(page_title="Workout Tracker", page_icon="💪", layout="wide"
 # Giorni della settimana
 GIORNI = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato", "Domenica"]
 
+# --- CONNESSIONE GOOGLE SHEETS ---
+@st.cache_resource
+def get_gsheet_client():
+    """Connessione a Google Sheets"""
+    try:
+        # Usa le credenziali dai secrets di Streamlit
+        credentials = Credentials.from_service_account_info(
+            st.secrets["gcp_service_account"],
+            scopes=[
+                "https://www.googleapis.com/auth/spreadsheets",
+                "https://www.googleapis.com/auth/drive"
+            ]
+        )
+        return gspread.authorize(credentials)
+    except Exception as e:
+        st.error(f"Errore connessione Google Sheets: {e}")
+        return None
+
+def get_worksheet(sheet_name):
+    """Ottiene un worksheet specifico"""
+    try:
+        client = get_gsheet_client()
+        if not client:
+            return None
+        
+        # Apri il foglio tramite URL o ID
+        spreadsheet_id = st.secrets.get("spreadsheet_id", "")
+        spreadsheet_url = st.secrets.get("spreadsheet_url", "")
+        
+        if spreadsheet_url:
+            # Usa l'URL completo
+            spreadsheet = client.open_by_url(spreadsheet_url)
+        elif spreadsheet_id:
+            # Usa solo l'ID del foglio
+            spreadsheet = client.open_by_key(spreadsheet_id)
+        else:
+            # Fallback: usa il nome del foglio
+            spreadsheet = client.open(st.secrets["spreadsheet_name"])
+        
+        try:
+            worksheet = spreadsheet.worksheet(sheet_name)
+        except gspread.exceptions.WorksheetNotFound:
+            worksheet = spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=20)
+        
+        return worksheet
+    except Exception as e:
+        st.error(f"Errore accesso worksheet '{sheet_name}': {e}")
+        return None
+
+def save_template_to_sheets():
+    """Salva il template su Google Sheets"""
+    try:
+        worksheet = get_worksheet("Template")
+        if not worksheet:
+            return False
+        
+        # Pulisci il foglio
+        worksheet.clear()
+        
+        # Header
+        worksheet.update('A1', [['Giorno', 'Esercizio_JSON']])
+        
+        # Dati
+        data = []
+        for day, exercises in st.session_state.workout_template.items():
+            if exercises:
+                data.append([day, json.dumps(exercises, ensure_ascii=False)])
+        
+        if data:
+            worksheet.update(f'A2:B{len(data)+1}', data)
+        
+        return True
+    except Exception as e:
+        st.error(f"Errore salvataggio template: {e}")
+        return False
+
+def load_template_from_sheets():
+    """Carica il template da Google Sheets"""
+    try:
+        worksheet = get_worksheet("Template")
+        if not worksheet:
+            return False
+        
+        records = worksheet.get_all_records()
+        
+        # Inizializza template vuoto
+        st.session_state.workout_template = {day: [] for day in GIORNI}
+        
+        # Carica dati
+        for record in records:
+            day = record.get('Giorno')
+            exercises_json = record.get('Esercizio_JSON')
+            if day and exercises_json:
+                st.session_state.workout_template[day] = json.loads(exercises_json)
+        
+        return True
+    except Exception as e:
+        st.error(f"Errore caricamento template: {e}")
+        return False
+
+def save_history_to_sheets():
+    """Salva lo storico su Google Sheets"""
+    try:
+        worksheet = get_worksheet("History")
+        if not worksheet:
+            return False
+        
+        # Pulisci il foglio
+        worksheet.clear()
+        
+        # Header
+        worksheet.update('A1', [['Data', 'Giorno', 'Esercizi_JSON']])
+        
+        # Dati
+        data = []
+        for session in st.session_state.workout_history:
+            data.append([
+                session['data'],
+                session['giorno'],
+                json.dumps(session['esercizi'], ensure_ascii=False)
+            ])
+        
+        if data:
+            worksheet.update(f'A2:C{len(data)+1}', data)
+        
+        return True
+    except Exception as e:
+        st.error(f"Errore salvataggio storico: {e}")
+        return False
+
+def load_history_from_sheets():
+    """Carica lo storico da Google Sheets"""
+    try:
+        worksheet = get_worksheet("History")
+        if not worksheet:
+            return False
+        
+        records = worksheet.get_all_records()
+        
+        st.session_state.workout_history = []
+        
+        for record in records:
+            session = {
+                'data': record.get('Data'),
+                'giorno': record.get('Giorno'),
+                'esercizi': json.loads(record.get('Esercizi_JSON', '[]'))
+            }
+            st.session_state.workout_history.append(session)
+        
+        return True
+    except Exception as e:
+        st.error(f"Errore caricamento storico: {e}")
+        return False
+
+def save_all_data():
+    """Salva tutto"""
+    success = True
+    success = save_template_to_sheets() and success
+    success = save_history_to_sheets() and success
+    return success
+
+def load_all_data():
+    """Carica tutto"""
+    success = True
+    success = load_template_from_sheets() and success
+    success = load_history_from_sheets() and success
+    return success
+
+# --- RESTO DEL CODICE ORIGINALE ---
+
 def init_session_state():
     """Inizializza la struttura dati"""
     if 'workout_template' not in st.session_state:
-        # Template della scheda settimanale (esercizi base)
         st.session_state.workout_template = {day: [] for day in GIORNI}
     
     if 'workout_history' not in st.session_state:
-        # Storico degli allenamenti completati
         st.session_state.workout_history = []
-
-def save_data():
-    """Salva i dati"""
-    try:
-        data = {
-            'template': st.session_state.workout_template,
-            'history': st.session_state.workout_history
-        }
-        with open('workout_data.json', 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        return True
-    except Exception as e:
-        st.error(f"Errore nel salvataggio: {e}")
-        return False
-
-def load_data():
-    """Carica i dati"""
-    try:
-        with open('workout_data.json', 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            st.session_state.workout_template = data.get('template', {day: [] for day in GIORNI})
-            st.session_state.workout_history = data.get('history', [])
-        return True
-    except FileNotFoundError:
-        return False
-    except Exception as e:
-        st.error(f"Errore nel caricamento: {e}")
-        return False
+    
+    if 'data_loaded' not in st.session_state:
+        # Carica automaticamente all'avvio
+        load_all_data()
+        st.session_state.data_loaded = True
 
 def add_exercise_to_template(day):
     """Aggiunge un esercizio al template"""
@@ -107,14 +254,17 @@ menu = st.sidebar.radio("Menu", [
 st.sidebar.markdown("---")
 col1, col2 = st.sidebar.columns(2)
 if col1.button("💾 Salva"):
-    if save_data():
-        st.sidebar.success("Salvato!")
-if col2.button("📂 Carica"):
-    if load_data():
-        st.sidebar.success("Caricato!")
-        st.rerun()
-    else:
-        st.sidebar.info("Nessun file")
+    with st.spinner("Salvataggio..."):
+        if save_all_data():
+            st.sidebar.success("✅ Salvato!")
+        else:
+            st.sidebar.error("❌ Errore")
+
+if col2.button("🔄 Ricarica"):
+    with st.spinner("Caricamento..."):
+        if load_all_data():
+            st.sidebar.success("✅ Caricato!")
+            st.rerun()
 
 # --- SCHEDA ALLENAMENTO (Template) ---
 if menu == "📋 Scheda Allenamento":
@@ -200,7 +350,6 @@ elif menu == "✍️ Registra Allenamento":
     if not template_exercises:
         st.warning(f"⚠️ Nessun esercizio configurato per {selected_day}. Vai in 'Scheda Allenamento' per configurare gli esercizi.")
     else:
-        # Form per registrare l'allenamento
         with st.form(f"workout_form_{selected_day}_{workout_date}"):
             exercises_data = []
             
@@ -253,7 +402,7 @@ elif menu == "✍️ Registra Allenamento":
             
             if submitted:
                 save_workout_session(selected_day, workout_date.strftime("%Y-%m-%d"), exercises_data)
-                save_data()
+                save_all_data()
                 st.success(f"✅ Allenamento di {selected_day} del {workout_date.strftime('%d/%m/%Y')} salvato!")
                 st.balloons()
 
@@ -264,18 +413,15 @@ elif menu == "📅 Storico":
     if not st.session_state.workout_history:
         st.info("Nessun allenamento registrato. Vai in 'Registra Allenamento' per iniziare!")
     else:
-        # Filtri
         col1, col2 = st.columns(2)
         with col1:
             giorni_disponibili = ["Tutti"] + sorted(list(set([s['giorno'] for s in st.session_state.workout_history])))
             filtro_giorno = st.selectbox("Filtra per giorno", giorni_disponibili)
         
-        # Mostra storico
         history = st.session_state.workout_history
         if filtro_giorno != "Tutti":
             history = [s for s in history if s['giorno'] == filtro_giorno]
         
-        # Ordina per data (più recente prima)
         history = sorted(history, key=lambda x: x['data'], reverse=True)
         
         for session in history:
@@ -299,7 +445,6 @@ elif menu == "📅 Storico":
 elif menu == "📈 Progressione":
     st.title("📈 Progressione Esercizi")
     
-    # Raccogli tutti gli esercizi unici
     all_exercises = set()
     for day in GIORNI:
         for ex in st.session_state.workout_template[day]:
@@ -316,23 +461,19 @@ elif menu == "📈 Progressione":
         if not history:
             st.warning(f"Nessun allenamento registrato per '{selected_exercise}'")
         else:
-            # Estrai dati per i grafici
             dates = [h['data'] for h in history]
             weights = []
             completions = []
             
             for h in history:
-                # Peso
                 try:
                     peso_val = float(h['peso'].replace('kg', '').replace('Kg', '').strip())
                     weights.append(peso_val)
                 except:
                     weights.append(None)
                 
-                # Completamento
                 completions.append(1 if h['completato'] else 0)
             
-            # Grafico peso
             st.subheader("📊 Progressione Peso")
             fig_weight = go.Figure()
             
@@ -358,7 +499,6 @@ elif menu == "📈 Progressione":
                 
                 st.plotly_chart(fig_weight, use_container_width=True)
                 
-                # Statistiche peso
                 col1, col2, col3 = st.columns(3)
                 with col1:
                     st.metric("Peso Iniziale", f"{valid_weight_values[0]:.1f} kg")
@@ -370,7 +510,6 @@ elif menu == "📈 Progressione":
             else:
                 st.info("Nessun dato di peso registrato")
             
-            # Grafico completamento
             st.subheader("✅ Tasso di Completamento")
             fig_comp = go.Figure()
             
@@ -392,7 +531,6 @@ elif menu == "📈 Progressione":
             
             st.plotly_chart(fig_comp, use_container_width=True)
             
-            # Tabella dettagli
             st.subheader("📋 Dettagli Allenamenti")
             detail_data = []
             for h in history:
@@ -409,7 +547,6 @@ elif menu == "📈 Progressione":
             df = pd.DataFrame(detail_data)
             st.dataframe(df, use_container_width=True, hide_index=True)
 
-# Footer
 st.sidebar.markdown("---")
-st.sidebar.markdown("💪 **Workout Tracker v2.0**")
-st.sidebar.markdown("Traccia i tuoi progressi!")
+st.sidebar.markdown("💪 **Workout Tracker v2.1**")
+st.sidebar.markdown("Con Google Sheets!")
