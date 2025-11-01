@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import json
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from google.oauth2.service_account import Credentials
 import gspread
 
@@ -17,7 +17,6 @@ GIORNI = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato",
 def get_gsheet_client():
     """Connessione a Google Sheets"""
     try:
-        # Usa le credenziali dai secrets di Streamlit
         credentials = Credentials.from_service_account_info(
             st.secrets["gcp_service_account"],
             scopes=[
@@ -37,18 +36,14 @@ def get_worksheet(sheet_name):
         if not client:
             return None
         
-        # Apri il foglio tramite URL o ID
         spreadsheet_id = st.secrets.get("spreadsheet_id", "")
         spreadsheet_url = st.secrets.get("spreadsheet_url", "")
         
         if spreadsheet_url:
-            # Usa l'URL completo
             spreadsheet = client.open_by_url(spreadsheet_url)
         elif spreadsheet_id:
-            # Usa solo l'ID del foglio
             spreadsheet = client.open_by_key(spreadsheet_id)
         else:
-            # Fallback: usa il nome del foglio
             spreadsheet = client.open(st.secrets["spreadsheet_name"])
         
         try:
@@ -68,13 +63,9 @@ def save_template_to_sheets():
         if not worksheet:
             return False
         
-        # Pulisci il foglio
         worksheet.clear()
-        
-        # Header
         worksheet.update('A1', [['Giorno', 'Esercizio_JSON']])
         
-        # Dati
         data = []
         for day, exercises in st.session_state.workout_template.items():
             if exercises:
@@ -96,11 +87,8 @@ def load_template_from_sheets():
             return False
         
         records = worksheet.get_all_records()
-        
-        # Inizializza template vuoto
         st.session_state.workout_template = {day: [] for day in GIORNI}
         
-        # Carica dati
         for record in records:
             day = record.get('Giorno')
             exercises_json = record.get('Esercizio_JSON')
@@ -112,6 +100,39 @@ def load_template_from_sheets():
         st.error(f"Errore caricamento template: {e}")
         return False
 
+def save_config_to_sheets():
+    """Salva la configurazione (data inizio scheda)"""
+    try:
+        worksheet = get_worksheet("Config")
+        if not worksheet:
+            return False
+        
+        worksheet.clear()
+        worksheet.update('A1', [['Chiave', 'Valore']])
+        worksheet.update('A2', [['data_inizio_scheda', st.session_state.data_inizio_scheda]])
+        
+        return True
+    except Exception as e:
+        st.error(f"Errore salvataggio config: {e}")
+        return False
+
+def load_config_from_sheets():
+    """Carica la configurazione"""
+    try:
+        worksheet = get_worksheet("Config")
+        if not worksheet:
+            return False
+        
+        records = worksheet.get_all_records()
+        for record in records:
+            if record.get('Chiave') == 'data_inizio_scheda':
+                st.session_state.data_inizio_scheda = record.get('Valore', '')
+        
+        return True
+    except Exception as e:
+        st.error(f"Errore caricamento config: {e}")
+        return False
+
 def save_history_to_sheets():
     """Salva lo storico su Google Sheets"""
     try:
@@ -119,23 +140,20 @@ def save_history_to_sheets():
         if not worksheet:
             return False
         
-        # Pulisci il foglio
         worksheet.clear()
+        worksheet.update('A1', [['Data', 'Giorno', 'Settimana', 'Esercizi_JSON']])
         
-        # Header
-        worksheet.update('A1', [['Data', 'Giorno', 'Esercizi_JSON']])
-        
-        # Dati
         data = []
         for session in st.session_state.workout_history:
             data.append([
                 session['data'],
                 session['giorno'],
+                session.get('settimana', 1),
                 json.dumps(session['esercizi'], ensure_ascii=False)
             ])
         
         if data:
-            worksheet.update(f'A2:C{len(data)+1}', data)
+            worksheet.update(f'A2:D{len(data)+1}', data)
         
         return True
     except Exception as e:
@@ -150,13 +168,13 @@ def load_history_from_sheets():
             return False
         
         records = worksheet.get_all_records()
-        
         st.session_state.workout_history = []
         
         for record in records:
             session = {
                 'data': record.get('Data'),
                 'giorno': record.get('Giorno'),
+                'settimana': record.get('Settimana', 1),
                 'esercizi': json.loads(record.get('Esercizi_JSON', '[]'))
             }
             st.session_state.workout_history.append(session)
@@ -171,6 +189,7 @@ def save_all_data():
     success = True
     success = save_template_to_sheets() and success
     success = save_history_to_sheets() and success
+    success = save_config_to_sheets() and success
     return success
 
 def load_all_data():
@@ -178,9 +197,18 @@ def load_all_data():
     success = True
     success = load_template_from_sheets() and success
     success = load_history_from_sheets() and success
+    success = load_config_from_sheets() and success
     return success
 
-# --- RESTO DEL CODICE ORIGINALE ---
+def calculate_current_week(start_date_str, current_date):
+    """Calcola la settimana corrente (1-6) basandosi sulla data di inizio"""
+    try:
+        start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+        delta_days = (current_date - start_date).days
+        week_number = (delta_days // 7) % 6 + 1
+        return week_number
+    except:
+        return 1
 
 def init_session_state():
     """Inizializza la struttura dati"""
@@ -190,8 +218,10 @@ def init_session_state():
     if 'workout_history' not in st.session_state:
         st.session_state.workout_history = []
     
+    if 'data_inizio_scheda' not in st.session_state:
+        st.session_state.data_inizio_scheda = date.today().strftime("%Y-%m-%d")
+    
     if 'data_loaded' not in st.session_state:
-        # Carica automaticamente all'avvio
         load_all_data()
         st.session_state.data_loaded = True
 
@@ -199,8 +229,8 @@ def add_exercise_to_template(day):
     """Aggiunge un esercizio al template"""
     new_exercise = {
         'nome': '',
-        'serie': '',
-        'ripetizioni': '',
+        'serie_settimane': ['', '', '', '', '', ''],  # 6 settimane
+        'ripetizioni_settimane': ['', '', '', '', '', ''],  # 6 settimane
         'recupero': '',
         'note': ''
     }
@@ -210,11 +240,12 @@ def delete_exercise_from_template(day, idx):
     """Elimina un esercizio dal template"""
     st.session_state.workout_template[day].pop(idx)
 
-def save_workout_session(day, date_str, exercises_data):
+def save_workout_session(day, date_str, week_number, exercises_data):
     """Salva una sessione di allenamento completata"""
     session = {
         'data': date_str,
         'giorno': day,
+        'settimana': week_number,
         'esercizi': exercises_data
     }
     st.session_state.workout_history.append(session)
@@ -228,6 +259,7 @@ def get_exercise_history(exercise_name):
                 history.append({
                     'data': session['data'],
                     'giorno': session['giorno'],
+                    'settimana': session.get('settimana', 1),
                     'peso': ex.get('peso', ''),
                     'serie_target': ex.get('serie_target', ''),
                     'rip_target': ex.get('rip_target', ''),
@@ -242,7 +274,6 @@ def get_last_weight_for_exercise(exercise_name):
     """Ottiene l'ultimo peso utilizzato per un esercizio"""
     history = get_exercise_history(exercise_name)
     if history:
-        # Cerca l'ultimo peso valido (non vuoto)
         for h in reversed(history):
             if h['peso'] and h['peso'].strip():
                 return h['peso']
@@ -253,6 +284,30 @@ init_session_state()
 
 # Sidebar
 st.sidebar.title("💪 Workout Tracker")
+
+# Configurazione Data Inizio Scheda
+st.sidebar.markdown("### ⚙️ Configurazione Scheda")
+try:
+    data_corrente = datetime.strptime(st.session_state.data_inizio_scheda, "%Y-%m-%d").date()
+except:
+    data_corrente = date.today()
+
+new_start_date = st.sidebar.date_input(
+    "Data Inizio Scheda",
+    value=data_corrente,
+    help="Imposta la data di inizio della tua scheda di allenamento"
+)
+
+if new_start_date.strftime("%Y-%m-%d") != st.session_state.data_inizio_scheda:
+    st.session_state.data_inizio_scheda = new_start_date.strftime("%Y-%m-%d")
+    save_config_to_sheets()
+
+# Mostra settimana corrente
+current_week = calculate_current_week(st.session_state.data_inizio_scheda, date.today())
+st.sidebar.info(f"📅 **Settimana corrente: {current_week}/6**")
+
+st.sidebar.markdown("---")
+
 menu = st.sidebar.radio("Menu", [
     "📋 Scheda Allenamento",
     "✍️ Registra Allenamento",
@@ -278,8 +333,8 @@ if col2.button("🔄 Ricarica"):
 
 # --- SCHEDA ALLENAMENTO (Template) ---
 if menu == "📋 Scheda Allenamento":
-    st.title("📋 Scheda Allenamento Settimanale")
-    st.info("💡 Configura qui gli esercizi della tua scheda. Questi saranno ripetuti ogni settimana.")
+    st.title("📋 Scheda Allenamento Settimanale (6 Settimane)")
+    st.info("💡 Configura qui gli esercizi della tua scheda. Specifica serie e ripetizioni per ciascuna delle 6 settimane.")
     
     selected_day = st.selectbox("Seleziona Giorno", GIORNI)
     
@@ -295,6 +350,13 @@ if menu == "📋 Scheda Allenamento":
         st.info(f"Nessun esercizio programmato per {selected_day}")
     else:
         for idx, exercise in enumerate(exercises):
+            # Migrazione dati vecchi a nuovo formato
+            if 'serie_settimane' not in exercise:
+                old_serie = exercise.get('serie', '')
+                old_rip = exercise.get('ripetizioni', '')
+                exercise['serie_settimane'] = [old_serie] * 6
+                exercise['ripetizioni_settimane'] = [old_rip] * 6
+            
             with st.expander(f"🏋️ {exercise.get('nome', '') or f'Esercizio {idx+1}'}", expanded=True):
                 col1, col2 = st.columns([3, 1])
                 
@@ -310,25 +372,36 @@ if menu == "📋 Scheda Allenamento":
                         delete_exercise_from_template(selected_day, idx)
                         st.rerun()
                 
-                col3, col4, col5 = st.columns(3)
+                st.markdown("**Serie e Ripetizioni per settimana:**")
                 
+                # Crea 3 righe x 2 colonne per le 6 settimane
+                for row in range(3):
+                    cols = st.columns(2)
+                    for col_idx in range(2):
+                        week_num = row * 2 + col_idx
+                        with cols[col_idx]:
+                            st.markdown(f"*Settimana {week_num + 1}*")
+                            subcol1, subcol2 = st.columns(2)
+                            with subcol1:
+                                exercise['serie_settimane'][week_num] = st.text_input(
+                                    "Serie",
+                                    value=exercise['serie_settimane'][week_num],
+                                    placeholder="5",
+                                    key=f"tpl_serie_{selected_day}_{idx}_w{week_num}",
+                                    label_visibility="collapsed"
+                                )
+                            with subcol2:
+                                exercise['ripetizioni_settimane'][week_num] = st.text_input(
+                                    "Ripetizioni",
+                                    value=exercise['ripetizioni_settimane'][week_num],
+                                    placeholder="4",
+                                    key=f"tpl_rip_{selected_day}_{idx}_w{week_num}",
+                                    label_visibility="collapsed"
+                                )
+                
+                st.markdown("**Recupero e Note:**")
+                col3, col4 = st.columns(2)
                 with col3:
-                    exercise['serie'] = st.text_input(
-                        "Serie",
-                        value=exercise.get('serie', ''),
-                        placeholder="5",
-                        key=f"tpl_serie_{selected_day}_{idx}"
-                    )
-                
-                with col4:
-                    exercise['ripetizioni'] = st.text_input(
-                        "Ripetizioni",
-                        value=exercise.get('ripetizioni', ''),
-                        placeholder="4",
-                        key=f"tpl_rip_{selected_day}_{idx}"
-                    )
-                
-                with col5:
                     exercise['recupero'] = st.text_input(
                         "Recupero",
                         value=exercise.get('recupero', ''),
@@ -353,6 +426,10 @@ elif menu == "✍️ Registra Allenamento":
     with col2:
         workout_date = st.date_input("Data", value=date.today())
     
+    # Calcola la settimana per la data selezionata
+    week_number = calculate_current_week(st.session_state.data_inizio_scheda, workout_date)
+    st.info(f"📅 Questo allenamento è della **Settimana {week_number}/6**")
+    
     st.markdown("---")
     
     template_exercises = st.session_state.workout_template[selected_day]
@@ -364,12 +441,23 @@ elif menu == "✍️ Registra Allenamento":
             exercises_data = []
             
             for idx, template_ex in enumerate(template_exercises):
+                # Migrazione dati vecchi
+                if 'serie_settimane' not in template_ex:
+                    old_serie = template_ex.get('serie', '')
+                    old_rip = template_ex.get('ripetizioni', '')
+                    template_ex['serie_settimane'] = [old_serie] * 6
+                    template_ex['ripetizioni_settimane'] = [old_rip] * 6
+                
+                # Ottieni i valori per la settimana corrente (indice 0-5)
+                week_idx = week_number - 1
+                serie_target = template_ex['serie_settimane'][week_idx]
+                rip_target = template_ex['ripetizioni_settimane'][week_idx]
+                
                 st.subheader(f"🏋️ {template_ex['nome']}")
-                st.caption(f"Target: {template_ex['serie']}x{template_ex['ripetizioni']} - Recupero: {template_ex['recupero']}")
+                st.caption(f"**Settimana {week_number}** - Target: {serie_target}x{rip_target} - Recupero: {template_ex['recupero']}")
                 
                 col1, col2, col3 = st.columns(3)
                 
-                # Ottieni l'ultimo peso utilizzato per questo esercizio
                 last_weight = get_last_weight_for_exercise(template_ex['nome'])
                 peso_placeholder = last_weight if last_weight else "Da determinare"
                 
@@ -383,7 +471,7 @@ elif menu == "✍️ Registra Allenamento":
                 with col2:
                     serie_fatte = st.text_input(
                         "Serie completate",
-                        value=template_ex['serie'],
+                        value=serie_target,
                         key=f"reg_serie_{idx}"
                     )
                 
@@ -401,8 +489,8 @@ elif menu == "✍️ Registra Allenamento":
                 
                 exercises_data.append({
                     'nome': template_ex['nome'],
-                    'serie_target': template_ex['serie'],
-                    'rip_target': template_ex['ripetizioni'],
+                    'serie_target': serie_target,
+                    'rip_target': rip_target,
                     'recupero': template_ex['recupero'],
                     'peso': peso,
                     'serie_eseguite': serie_fatte,
@@ -415,9 +503,9 @@ elif menu == "✍️ Registra Allenamento":
             submitted = st.form_submit_button("💾 Salva Allenamento", use_container_width=True)
             
             if submitted:
-                save_workout_session(selected_day, workout_date.strftime("%Y-%m-%d"), exercises_data)
+                save_workout_session(selected_day, workout_date.strftime("%Y-%m-%d"), week_number, exercises_data)
                 save_all_data()
-                st.success(f"✅ Allenamento di {selected_day} del {workout_date.strftime('%d/%m/%Y')} salvato!")
+                st.success(f"✅ Allenamento di {selected_day} (Settimana {week_number}) del {workout_date.strftime('%d/%m/%Y')} salvato!")
                 st.balloons()
 
 # --- STORICO ---
@@ -432,14 +520,23 @@ elif menu == "📅 Storico":
             giorni_disponibili = ["Tutti"] + sorted(list(set([s['giorno'] for s in st.session_state.workout_history])))
             filtro_giorno = st.selectbox("Filtra per giorno", giorni_disponibili)
         
+        with col2:
+            settimane_disponibili = ["Tutte"] + [f"Settimana {i}" for i in range(1, 7)]
+            filtro_settimana = st.selectbox("Filtra per settimana", settimane_disponibili)
+        
         history = st.session_state.workout_history
         if filtro_giorno != "Tutti":
             history = [s for s in history if s['giorno'] == filtro_giorno]
         
+        if filtro_settimana != "Tutte":
+            week_num = int(filtro_settimana.split()[1])
+            history = [s for s in history if s.get('settimana', 1) == week_num]
+        
         history = sorted(history, key=lambda x: x['data'], reverse=True)
         
         for session in history:
-            with st.expander(f"📆 {session['data']} - {session['giorno']}"):
+            week_label = session.get('settimana', 1)
+            with st.expander(f"📆 {session['data']} - {session['giorno']} (Settimana {week_label})"):
                 data = []
                 for ex in session['esercizi']:
                     status = "✅" if ex['completato'] else "❌"
@@ -478,6 +575,7 @@ elif menu == "📈 Progressione":
             dates = [h['data'] for h in history]
             weights = []
             completions = []
+            weeks = [h.get('settimana', 1) for h in history]
             
             for h in history:
                 try:
@@ -491,16 +589,22 @@ elif menu == "📈 Progressione":
             st.subheader("📊 Progressione Peso")
             fig_weight = go.Figure()
             
-            valid_weights = [(d, w) for d, w in zip(dates, weights) if w is not None]
+            valid_weights = [(d, w, wk) for d, w, wk in zip(dates, weights, weeks) if w is not None]
             if valid_weights:
-                valid_dates, valid_weight_values = zip(*valid_weights)
+                valid_dates, valid_weight_values, valid_weeks = zip(*valid_weights)
+                
+                # Colora i punti in base alla settimana
+                colors = [f'rgb({40 + wk*30}, {100 + wk*20}, {200 - wk*20})' for wk in valid_weeks]
+                
                 fig_weight.add_trace(go.Scatter(
                     x=valid_dates,
                     y=valid_weight_values,
                     mode='lines+markers',
                     name='Peso',
                     line=dict(color='#1f77b4', width=3),
-                    marker=dict(size=10)
+                    marker=dict(size=10, color=colors),
+                    text=[f"Settimana {wk}" for wk in valid_weeks],
+                    hovertemplate='<b>%{x}</b><br>Peso: %{y:.1f} kg<br>%{text}<extra></extra>'
                 ))
                 
                 fig_weight.update_layout(
@@ -531,7 +635,9 @@ elif menu == "📈 Progressione":
                 x=dates,
                 y=completions,
                 marker_color=['#2ecc71' if c == 1 else '#e74c3c' for c in completions],
-                name='Completato'
+                name='Completato',
+                text=[f"S{wk}" for wk in weeks],
+                textposition='outside'
             ))
             
             fig_comp.update_layout(
@@ -550,6 +656,7 @@ elif menu == "📈 Progressione":
             for h in history:
                 detail_data.append({
                     "Data": h['data'],
+                    "Settimana": h.get('settimana', 1),
                     "Giorno": h['giorno'],
                     "Target": f"{h['serie_target']}x{h['rip_target']}",
                     "Eseguito": f"{h['serie_eseguite']}x{h['rip_eseguite']}",
@@ -562,5 +669,5 @@ elif menu == "📈 Progressione":
             st.dataframe(df, use_container_width=True, hide_index=True)
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("💪 **Workout Tracker v2.2**")
-st.sidebar.markdown("Con Google Sheets!")
+st.sidebar.markdown("💪 **Workout Tracker v3.0**")
+st.sidebar.markdown("Ciclo 6 settimane!")
