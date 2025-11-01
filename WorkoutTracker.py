@@ -467,7 +467,8 @@ elif menu == "✍️ Registra Allenamento":
                 rip_target = template_ex['ripetizioni_settimane'][week_idx]
                 
                 st.subheader(f"🏋️ {template_ex['nome']}")
-                st.caption(f"**Settimana {week_number}** - Target: {serie_target}x{rip_target} - Recupero: {template_ex['recupero']}")
+                note_text = template_ex.get('note', '').strip() or "Nessuna"
+                st.caption(f"**Settimana {week_number}** - Target: {serie_target}x{rip_target} - Recupero: {template_ex['recupero']} - Note: {note_text}")
                 
                 col1, col2, col3 = st.columns(3)
                 
