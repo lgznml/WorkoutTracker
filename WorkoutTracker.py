@@ -204,8 +204,16 @@ def calculate_current_week(start_date_str, current_date):
     """Calcola la settimana corrente (1-6) basandosi sulla data di inizio"""
     try:
         start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
-        delta_days = (current_date - start_date).days
+        
+        # Trova il lunedì della settimana in cui cade start_date
+        # weekday() restituisce 0=lunedì, 6=domenica
+        days_since_monday = start_date.weekday()
+        monday_of_start_week = start_date - timedelta(days=days_since_monday)
+        
+        # Calcola quante settimane sono passate dal lunedì iniziale
+        delta_days = (current_date - monday_of_start_week).days
         week_number = (delta_days // 7) % 6 + 1
+        
         return week_number
     except:
         return 1
@@ -290,21 +298,26 @@ st.sidebar.markdown("### ⚙️ Configurazione Scheda")
 try:
     data_corrente = datetime.strptime(st.session_state.data_inizio_scheda, "%Y-%m-%d").date()
 except:
-    data_corrente = date.today()
+    data_corrente = date(2025, 11, 3)  # Default: 3/11/2025
 
 new_start_date = st.sidebar.date_input(
     "Data Inizio Scheda",
     value=data_corrente,
-    help="Imposta la data di inizio della tua scheda di allenamento"
+    help="La settimana 1 partirà dal lunedì di questa settimana"
 )
 
 if new_start_date.strftime("%Y-%m-%d") != st.session_state.data_inizio_scheda:
     st.session_state.data_inizio_scheda = new_start_date.strftime("%Y-%m-%d")
     save_config_to_sheets()
 
+# Calcola il lunedì della settimana di inizio
+days_since_monday = data_corrente.weekday()
+monday_of_start = data_corrente - timedelta(days=days_since_monday)
+
 # Mostra settimana corrente
 current_week = calculate_current_week(st.session_state.data_inizio_scheda, date.today())
 st.sidebar.info(f"📅 **Settimana corrente: {current_week}/6**")
+st.sidebar.caption(f"Settimana 1 inizia: {monday_of_start.strftime('%d/%m/%Y')}")
 
 st.sidebar.markdown("---")
 
