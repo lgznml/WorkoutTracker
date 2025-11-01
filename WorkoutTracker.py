@@ -219,7 +219,7 @@ def init_session_state():
         st.session_state.workout_history = []
     
     if 'data_inizio_scheda' not in st.session_state:
-        st.session_state.data_inizio_scheda = date.today().strftime("%Y-%m-%d")
+        st.session_state.data_inizio_scheda = "2025-11-03"  # Data di default: 3/11/2025
     
     if 'data_loaded' not in st.session_state:
         load_all_data()
