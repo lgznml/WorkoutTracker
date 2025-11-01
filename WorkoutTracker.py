@@ -250,6 +250,13 @@ def delete_exercise_from_template(day, idx):
 
 def save_workout_session(day, date_str, week_number, exercises_data):
     """Salva una sessione di allenamento completata"""
+    # Rimuovi eventuali allenamenti già esistenti con la stessa data
+    st.session_state.workout_history = [
+        s for s in st.session_state.workout_history 
+        if s['data'] != date_str
+    ]
+    
+    # Aggiungi il nuovo allenamento
     session = {
         'data': date_str,
         'giorno': day,
