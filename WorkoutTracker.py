@@ -238,6 +238,16 @@ def get_exercise_history(exercise_name):
                 })
     return sorted(history, key=lambda x: x['data'])
 
+def get_last_weight_for_exercise(exercise_name):
+    """Ottiene l'ultimo peso utilizzato per un esercizio"""
+    history = get_exercise_history(exercise_name)
+    if history:
+        # Cerca l'ultimo peso valido (non vuoto)
+        for h in reversed(history):
+            if h['peso'] and h['peso'].strip():
+                return h['peso']
+    return None
+
 # Inizializza
 init_session_state()
 
@@ -359,10 +369,14 @@ elif menu == "✍️ Registra Allenamento":
                 
                 col1, col2, col3 = st.columns(3)
                 
+                # Ottieni l'ultimo peso utilizzato per questo esercizio
+                last_weight = get_last_weight_for_exercise(template_ex['nome'])
+                peso_placeholder = last_weight if last_weight else "Da determinare"
+                
                 with col1:
                     peso = st.text_input(
                         "Peso utilizzato",
-                        placeholder="65kg",
+                        placeholder=peso_placeholder,
                         key=f"reg_peso_{idx}"
                     )
                 
@@ -548,5 +562,5 @@ elif menu == "📈 Progressione":
             st.dataframe(df, use_container_width=True, hide_index=True)
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("💪 **Workout Tracker v2.1**")
+st.sidebar.markdown("💪 **Workout Tracker v2.2**")
 st.sidebar.markdown("Con Google Sheets!")
