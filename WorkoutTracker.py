@@ -103,6 +103,13 @@ def get_saved_user():
         st.session_state.saved_username = None
         st.session_state.saved_login_date = None
     
+    # AGGIUNGI: Leggi dai query params se disponibili (comunicazione da JavaScript)
+    query_params = st.query_params
+    if 'auto_user' in query_params and not st.session_state.cookie_checked:
+        st.session_state.saved_username = query_params.get('auto_user')
+        st.session_state.saved_login_date = query_params.get('auto_date')
+        st.session_state.cookie_checked = True
+    
     return st.session_state.saved_username
 
 def check_login_expiry(login_date_str):
@@ -169,32 +176,64 @@ def get_user_full_name(username):
 
 def show_login_page():
     """Mostra la pagina di login"""
+    
+    # PRIMA DI TUTTO: Controlla localStorage e fai redirect automatico
+    if not st.session_state.cookie_checked:
+        # Inserisci uno script che controlla localStorage e fa redirect
+        components.html("""
+        <script>
+            (function() {
+                try {
+                    const username = window.localStorage.getItem('workout_user');
+                    const loginDate = window.localStorage.getItem('workout_login_date');
+                    
+                    if (username && loginDate) {
+                        const userData = JSON.parse(username);
+                        const dateData = JSON.parse(loginDate);
+                        const now = new Date().getTime();
+                        
+                        // Se i cookie sono validi (non scaduti)
+                        if (now <= userData.expiry && now <= dateData.expiry) {
+                            // Fai redirect con query params
+                            const currentUrl = new URL(window.location.href);
+                            currentUrl.searchParams.set('auto_user', userData.value);
+                            currentUrl.searchParams.set('auto_date', dateData.value);
+                            window.location.href = currentUrl.toString();
+                        }
+                    }
+                } catch (e) {
+                    console.log('No valid cookies:', e);
+                }
+            })();
+        </script>
+        """, height=0)
+        
+        st.session_state.cookie_checked = True
+        
+        # Se ci sono query params, processa il login automatico
+        saved_user = get_saved_user()
+        if saved_user:
+            st.info(f"🔄 Accesso automatico come **{saved_user}**...")
+            if verify_user_exists(saved_user):
+                st.session_state.logged_in = True
+                st.session_state.current_user = saved_user
+                st.session_state.user_full_name = get_user_full_name(saved_user)
+                # Pulisci i query params
+                st.query_params.clear()
+                st.rerun()
+            else:
+                delete_user_cookie()
+                st.session_state.saved_username = None
+                st.query_params.clear()
+    
+    # MOSTRA IL FORM DI LOGIN
     st.title("🔐 Login - Workout Tracker")
-    
-    # Controlla se c'è un utente salvato nei cookie
-    saved_user = get_saved_user()
-    
-    # Se c'è un utente salvato e non è scaduto, fai login automatico SENZA mostrare nulla
-    if saved_user and not check_login_expiry(st.session_state.saved_login_date):
-        if verify_user_exists(saved_user):
-            st.session_state.logged_in = True
-            st.session_state.current_user = saved_user
-            st.session_state.user_full_name = get_user_full_name(saved_user)
-            st.rerun()
-        else:
-            # Utente non esiste più, elimina cookie
-            delete_user_cookie()
-            st.session_state.saved_username = None
-    
-    # MOSTRA IL FORM DI LOGIN SOLO SE:
-    # - Non c'è un utente salvato, OPPURE
-    # - Il cookie è scaduto (più di 30 giorni)
     
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         st.markdown("### Accedi al tuo account")
         
-        username = st.text_input("Username", key="login_username", value=saved_user if saved_user else "")
+        username = st.text_input("Username", key="login_username")
         password = st.text_input("Password", type="password", key="login_password")
         
         remember_me = st.checkbox("🔒 Ricordami per 30 giorni", value=True)
@@ -220,54 +259,6 @@ def show_login_page():
             if st.button("📝 Registrati", use_container_width=True):
                 st.session_state.show_register = True
                 st.rerun()
-        
-        # Pulsante per cambiare account solo se c'è un utente salvato
-        if saved_user:
-            st.markdown("---")
-            if st.button("👤 Accedi con un altro account", use_container_width=True):
-                delete_user_cookie()
-                st.session_state.saved_username = None
-                st.session_state.saved_login_date = None
-                st.rerun()
-    
-    # Script per gestire i cookie (invisibile) - eseguito solo al primo caricamento
-    if not st.session_state.cookie_checked:
-        components.html("""
-        <script>
-            function checkAndSendCookies() {
-                const username = window.localStorage.getItem('workout_user');
-                const loginDate = window.localStorage.getItem('workout_login_date');
-                
-                if (username && loginDate) {
-                    try {
-                        const userData = JSON.parse(username);
-                        const dateData = JSON.parse(loginDate);
-                        
-                        // Verifica scadenza
-                        const now = new Date().getTime();
-                        if (now <= userData.expiry && now <= dateData.expiry) {
-                            // Cookie validi, invia a Streamlit
-                            window.parent.postMessage({
-                                type: 'streamlit:componentReady',
-                                username: userData.value,
-                                loginDate: dateData.value
-                            }, '*');
-                        }
-                    } catch (e) {
-                        console.log('No valid cookies found');
-                    }
-                }
-            }
-            
-            // Esegui al caricamento
-            if (document.readyState === 'loading') {
-                document.addEventListener('DOMContentLoaded', checkAndSendCookies);
-            } else {
-                checkAndSendCookies();
-            }
-        </script>
-        """, height=0)
-        st.session_state.cookie_checked = True
 
 def show_register_page():
     """Mostra la pagina di registrazione"""
@@ -682,12 +673,32 @@ def get_last_weight_for_exercise(exercise_name):
 # Inizializza
 init_session_state()
 
+# CONTROLLA LOGIN: gestisci auto-login prima di mostrare qualsiasi cosa
 if not st.session_state.logged_in:
+    # Se ci sono query params per auto-login, prova prima quello
+    query_params = st.query_params
+    if 'auto_user' in query_params and not st.session_state.get('auto_login_attempted', False):
+        saved_user = query_params.get('auto_user')
+        saved_date = query_params.get('auto_date')
+        
+        if saved_user and saved_date and not check_login_expiry(saved_date):
+            if verify_user_exists(saved_user):
+                st.session_state.logged_in = True
+                st.session_state.current_user = saved_user
+                st.session_state.user_full_name = get_user_full_name(saved_user)
+                st.session_state.auto_login_attempted = True
+                st.query_params.clear()
+                st.rerun()
+        
+        st.session_state.auto_login_attempted = True
+        st.query_params.clear()
+    
+    # Se non loggato, mostra pagina appropriata
     if st.session_state.get('show_register', False):
         show_register_page()
     else:
         show_login_page()
-    st.stop()  # ← Blocca l'esecuzione se non loggato
+    st.stop()
     
 # Sidebar
 st.sidebar.title("💪 Workout Tracker")
