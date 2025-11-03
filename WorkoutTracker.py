@@ -1141,4 +1141,3 @@ elif menu == "📈 Progressione":
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("💪 **Workout Tracker v3.0**")
-st.sidebar.markdown("Ciclo 6 settimane!")
