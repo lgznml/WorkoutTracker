@@ -6,6 +6,7 @@ from datetime import datetime, date, timedelta
 from google.oauth2.service_account import Credentials
 import gspread
 import hashlib
+import streamlit.components.v1 as components
 
 # Configurazione pagina
 st.set_page_config(page_title="Workout Tracker", page_icon="💪", layout="wide")
@@ -17,9 +18,120 @@ GIORNI = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato",
 # ← SEZIONE NUOVA: FUNZIONI DI AUTENTICAZIONE
 # ============================================================================
 
+def get_cookie_manager():
+    """Inizializza il cookie manager usando localStorage"""
+    cookie_script = """
+    <script>
+        // Funzioni per gestire localStorage come cookies
+        window.getCookie = function(name) {
+            return localStorage.getItem(name);
+        }
+        
+        window.setCookie = function(name, value, days) {
+            const expiryDate = new Date();
+            expiryDate.setTime(expiryDate.getTime() + (days * 24 * 60 * 60 * 1000));
+            const item = {
+                value: value,
+                expiry: expiryDate.getTime()
+            };
+            localStorage.setItem(name, JSON.stringify(item));
+            return true;
+        }
+        
+        window.deleteCookie = function(name) {
+            localStorage.removeItem(name);
+            return true;
+        }
+        
+        window.checkCookieExpiry = function(name) {
+            const itemStr = localStorage.getItem(name);
+            if (!itemStr) return null;
+            
+            const item = JSON.parse(itemStr);
+            const now = new Date().getTime();
+            
+            if (now > item.expiry) {
+                localStorage.removeItem(name);
+                return null;
+            }
+            return item.value;
+        }
+        
+        // Invia i cookie a Streamlit
+        window.addEventListener('load', function() {
+            const username = window.checkCookieExpiry('workout_user');
+            const loginDate = window.checkCookieExpiry('workout_login_date');
+            
+            window.parent.postMessage({
+                type: 'streamlit:setComponentValue',
+                username: username,
+                loginDate: loginDate
+            }, '*');
+        });
+    </script>
+    """
+    return cookie_script
+
+def set_user_cookie(username):
+    """Imposta cookie per ricordare l'utente per 30 giorni"""
+    current_date = datetime.now().strftime("%Y-%m-%d")
+    components.html(f"""
+    <script>
+        window.setCookie('workout_user', '{username}', 30);
+        window.setCookie('workout_login_date', '{current_date}', 30);
+        window.parent.postMessage({{
+            type: 'streamlit:setComponentValue',
+            username: '{username}',
+            loginDate: '{current_date}'
+        }}, '*');
+    </script>
+    """, height=0)
+
+def delete_user_cookie():
+    """Elimina i cookie dell'utente"""
+    components.html("""
+    <script>
+        window.deleteCookie('workout_user');
+        window.deleteCookie('workout_login_date');
+    </script>
+    """, height=0)
+
+def get_saved_user():
+    """Recupera l'utente salvato nei cookie"""
+    if 'cookie_checked' not in st.session_state:
+        st.session_state.cookie_checked = False
+        st.session_state.saved_username = None
+        st.session_state.saved_login_date = None
+    
+    return st.session_state.saved_username
+
+def check_login_expiry(login_date_str):
+    """Verifica se sono passati più di 30 giorni dall'ultimo login"""
+    if not login_date_str:
+        return True
+    
+    try:
+        login_date = datetime.strptime(login_date_str, "%Y-%m-%d")
+        days_passed = (datetime.now() - login_date).days
+        return days_passed > 30
+    except:
+        return True
+        
 def hash_password(password):
     """Crea hash della password"""
     return hashlib.sha256(password.encode()).hexdigest()
+
+def verify_user_exists(username):
+    """Verifica se l'utente esiste (senza password)"""
+    try:
+        worksheet = get_worksheet("Users")
+        if not worksheet:
+            return False
+        
+        records = worksheet.get_all_records()
+        return any(record.get('Username') == username for record in records)
+    except:
+        return False
 
 def verify_user(username, password):
     """Verifica le credenziali utente"""
@@ -59,12 +171,30 @@ def show_login_page():
     """Mostra la pagina di login"""
     st.title("🔐 Login - Workout Tracker")
     
+    # Controlla se c'è un utente salvato nei cookie
+    saved_user = get_saved_user()
+    
+    # Se c'è un utente salvato e non è scaduto, fai login automatico
+    if saved_user and not check_login_expiry(st.session_state.saved_login_date):
+        st.info(f"🔄 Accesso automatico come **{saved_user}**...")
+        if verify_user_exists(saved_user):
+            st.session_state.logged_in = True
+            st.session_state.current_user = saved_user
+            st.session_state.user_full_name = get_user_full_name(saved_user)
+            st.rerun()
+        else:
+            # Utente non esiste più, elimina cookie
+            delete_user_cookie()
+            st.session_state.saved_username = None
+    
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         st.markdown("### Accedi al tuo account")
         
-        username = st.text_input("Username", key="login_username")
+        username = st.text_input("Username", key="login_username", value=saved_user if saved_user else "")
         password = st.text_input("Password", type="password", key="login_password")
+        
+        remember_me = st.checkbox("🔒 Ricordami per 30 giorni", value=True)
         
         col_btn1, col_btn2 = st.columns(2)
         with col_btn1:
@@ -73,6 +203,12 @@ def show_login_page():
                     st.session_state.logged_in = True
                     st.session_state.current_user = username
                     st.session_state.user_full_name = get_user_full_name(username)
+                    
+                    if remember_me:
+                        set_user_cookie(username)
+                        st.session_state.saved_username = username
+                        st.session_state.saved_login_date = datetime.now().strftime("%Y-%m-%d")
+                    
                     st.rerun()
                 else:
                     st.error("❌ Username o password errati")
@@ -81,6 +217,54 @@ def show_login_page():
             if st.button("📝 Registrati", use_container_width=True):
                 st.session_state.show_register = True
                 st.rerun()
+        
+        # Pulsante per forzare nuovo login se c'è un utente salvato
+        if saved_user:
+            st.markdown("---")
+            if st.button("👤 Accedi con un altro account", use_container_width=True):
+                delete_user_cookie()
+                st.session_state.saved_username = None
+                st.session_state.saved_login_date = None
+                st.rerun()
+    
+    # Script per gestire i cookie (invisibile)
+    if not st.session_state.cookie_checked:
+        components.html("""
+        <script>
+            function checkAndSendCookies() {
+                const username = window.localStorage.getItem('workout_user');
+                const loginDate = window.localStorage.getItem('workout_login_date');
+                
+                if (username && loginDate) {
+                    try {
+                        const userData = JSON.parse(username);
+                        const dateData = JSON.parse(loginDate);
+                        
+                        // Verifica scadenza
+                        const now = new Date().getTime();
+                        if (now <= userData.expiry && now <= dateData.expiry) {
+                            // Cookie validi, invia a Streamlit
+                            window.parent.postMessage({
+                                type: 'streamlit:componentReady',
+                                username: userData.value,
+                                loginDate: dateData.value
+                            }, '*');
+                        }
+                    } catch (e) {
+                        console.log('No valid cookies found');
+                    }
+                }
+            }
+            
+            // Esegui al caricamento
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', checkAndSendCookies);
+            } else {
+                checkAndSendCookies();
+            }
+        </script>
+        """, height=0)
+        st.session_state.cookie_checked = True
 
 def show_register_page():
     """Mostra la pagina di registrazione"""
