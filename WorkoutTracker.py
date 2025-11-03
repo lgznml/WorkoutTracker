@@ -174,9 +174,8 @@ def show_login_page():
     # Controlla se c'è un utente salvato nei cookie
     saved_user = get_saved_user()
     
-    # Se c'è un utente salvato e non è scaduto, fai login automatico
+    # Se c'è un utente salvato e non è scaduto, fai login automatico SENZA mostrare nulla
     if saved_user and not check_login_expiry(st.session_state.saved_login_date):
-        st.info(f"🔄 Accesso automatico come **{saved_user}**...")
         if verify_user_exists(saved_user):
             st.session_state.logged_in = True
             st.session_state.current_user = saved_user
@@ -186,6 +185,10 @@ def show_login_page():
             # Utente non esiste più, elimina cookie
             delete_user_cookie()
             st.session_state.saved_username = None
+    
+    # MOSTRA IL FORM DI LOGIN SOLO SE:
+    # - Non c'è un utente salvato, OPPURE
+    # - Il cookie è scaduto (più di 30 giorni)
     
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
@@ -218,7 +221,7 @@ def show_login_page():
                 st.session_state.show_register = True
                 st.rerun()
         
-        # Pulsante per forzare nuovo login se c'è un utente salvato
+        # Pulsante per cambiare account solo se c'è un utente salvato
         if saved_user:
             st.markdown("---")
             if st.button("👤 Accedi con un altro account", use_container_width=True):
@@ -227,7 +230,7 @@ def show_login_page():
                 st.session_state.saved_login_date = None
                 st.rerun()
     
-    # Script per gestire i cookie (invisibile)
+    # Script per gestire i cookie (invisibile) - eseguito solo al primo caricamento
     if not st.session_state.cookie_checked:
         components.html("""
         <script>
@@ -593,6 +596,12 @@ def init_session_state():
     
     if 'show_register' not in st.session_state:
         st.session_state.show_register = False
+    
+    # AGGIUNGI QUESTE RIGHE PER LEGGERE I COOKIE ALL'AVVIO
+    if 'cookie_checked' not in st.session_state:
+        st.session_state.cookie_checked = False
+        st.session_state.saved_username = None
+        st.session_state.saved_login_date = None
     
     # ← RESTO INVARIATO
     if 'workout_template' not in st.session_state:
