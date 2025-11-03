@@ -457,22 +457,27 @@ elif menu == "✍️ Registra Allenamento":
     if not template_exercises:
         st.warning(f"⚠️ Nessun esercizio configurato per {selected_day}. Vai in 'Scheda Allenamento' per configurare gli esercizi.")
     else:
-        with st.form(f"workout_form_{selected_day}_{workout_date}"):
-            exercises_data = []
+        # Carica gli esercizi già salvati per questa data (se esistono)
+        existing_session = next((s for s in st.session_state.workout_history if s['data'] == workout_date.strftime("%Y-%m-%d") and s['giorno'] == selected_day), None)
+        existing_exercises = {ex['nome']: ex for ex in existing_session['esercizi']} if existing_session else {}
+        
+        for idx, template_ex in enumerate(template_exercises):
+            # Migrazione dati vecchi
+            if 'serie_settimane' not in template_ex:
+                old_serie = template_ex.get('serie', '')
+                old_rip = template_ex.get('ripetizioni', '')
+                template_ex['serie_settimane'] = [old_serie] * 6
+                template_ex['ripetizioni_settimane'] = [old_rip] * 6
             
-            for idx, template_ex in enumerate(template_exercises):
-                # Migrazione dati vecchi
-                if 'serie_settimane' not in template_ex:
-                    old_serie = template_ex.get('serie', '')
-                    old_rip = template_ex.get('ripetizioni', '')
-                    template_ex['serie_settimane'] = [old_serie] * 6
-                    template_ex['ripetizioni_settimane'] = [old_rip] * 6
-                
-                # Ottieni i valori per la settimana corrente (indice 0-5)
-                week_idx = week_number - 1
-                serie_target = template_ex['serie_settimane'][week_idx]
-                rip_target = template_ex['ripetizioni_settimane'][week_idx]
-                
+            # Ottieni i valori per la settimana corrente (indice 0-5)
+            week_idx = week_number - 1
+            serie_target = template_ex['serie_settimane'][week_idx]
+            rip_target = template_ex['ripetizioni_settimane'][week_idx]
+            
+            # Recupera dati esistenti se presenti
+            existing_ex = existing_exercises.get(template_ex['nome'], {})
+            
+            with st.form(f"workout_form_{selected_day}_{workout_date}_{idx}"):
                 st.subheader(f"🏋️ {template_ex['nome']}")
                 note_text = template_ex.get('note', '').strip() or "Nessuna"
                 st.caption(f"**Settimana {week_number}** - Target: {serie_target}x{rip_target} - Recupero: {template_ex['recupero']} - Note: {note_text}")
@@ -485,6 +490,7 @@ elif menu == "✍️ Registra Allenamento":
                 with col1:
                     peso = st.text_input(
                         "Peso utilizzato",
+                        value=existing_ex.get('peso', ''),
                         placeholder=peso_placeholder,
                         key=f"reg_peso_{idx}"
                     )
@@ -492,34 +498,65 @@ elif menu == "✍️ Registra Allenamento":
                 with col2:
                     serie_fatte = st.text_input(
                         "Serie completate",
-                        value=serie_target,
+                        value=existing_ex.get('serie_eseguite', serie_target),
                         key=f"reg_serie_{idx}"
                     )
                 
                 with col3:
                     rip_fatte = st.text_input(
                         "Ripetizioni per serie",
+                        value=existing_ex.get('rip_eseguite', ''),
                         placeholder="4,4,4,4,4",
                         key=f"reg_rip_{idx}"
                     )
                 
                 completato = st.checkbox(
                     "✅ Obiettivo raggiunto (serie e ripetizioni completate)",
+                    value=existing_ex.get('completato', False),
                     key=f"reg_comp_{idx}"
                 )
                 
-                exercises_data.append({
-                    'nome': template_ex['nome'],
-                    'serie_target': serie_target,
-                    'rip_target': rip_target,
-                    'recupero': template_ex['recupero'],
-                    'peso': peso,
-                    'serie_eseguite': serie_fatte,
-                    'rip_eseguite': rip_fatte,
-                    'completato': completato
-                })
+                submitted = st.form_submit_button("💾 Salva Esercizio", use_container_width=True)
                 
-                st.markdown("---")
+                if submitted:
+                    # Crea o aggiorna la sessione di allenamento
+                    exercise_data = {
+                        'nome': template_ex['nome'],
+                        'serie_target': serie_target,
+                        'rip_target': rip_target,
+                        'recupero': template_ex['recupero'],
+                        'peso': peso,
+                        'serie_eseguite': serie_fatte,
+                        'rip_eseguite': rip_fatte,
+                        'completato': completato
+                    }
+                    
+                    # Trova o crea la sessione per questa data
+                    date_str = workout_date.strftime("%Y-%m-%d")
+                    session_idx = next((i for i, s in enumerate(st.session_state.workout_history) if s['data'] == date_str and s['giorno'] == selected_day), None)
+                    
+                    if session_idx is not None:
+                        # Aggiorna esercizio esistente o aggiungine uno nuovo
+                        ex_idx = next((i for i, ex in enumerate(st.session_state.workout_history[session_idx]['esercizi']) if ex['nome'] == template_ex['nome']), None)
+                        if ex_idx is not None:
+                            st.session_state.workout_history[session_idx]['esercizi'][ex_idx] = exercise_data
+                        else:
+                            st.session_state.workout_history[session_idx]['esercizi'].append(exercise_data)
+                    else:
+                        # Crea nuova sessione
+                        new_session = {
+                            'data': date_str,
+                            'giorno': selected_day,
+                            'settimana': week_number,
+                            'esercizi': [exercise_data]
+                        }
+                        st.session_state.workout_history.append(new_session)
+                    
+                    save_all_data()
+                    st.success(f"✅ Esercizio '{template_ex['nome']}' salvato!")
+                    st.rerun()
+            
+            st.markdown("---")
             
             submitted = st.form_submit_button("💾 Salva Allenamento", use_container_width=True)
             
