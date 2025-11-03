@@ -483,6 +483,10 @@ if st.sidebar.button("🚪 Logout"):
     st.session_state.current_user = None
     st.session_state.user_full_name = None
     st.session_state.data_loaded = False
+    # Pulisci tutti i dati dell'utente precedente
+    st.session_state.workout_template = {day: [] for day in GIORNI}
+    st.session_state.workout_history = []
+    st.session_state.data_inizio_scheda = "2025-11-03"
     st.rerun()
 
 st.sidebar.markdown("---")
