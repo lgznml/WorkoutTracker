@@ -5,12 +5,130 @@ import json
 from datetime import datetime, date, timedelta
 from google.oauth2.service_account import Credentials
 import gspread
+import hashlib
 
 # Configurazione pagina
 st.set_page_config(page_title="Workout Tracker", page_icon="💪", layout="wide")
 
 # Giorni della settimana
 GIORNI = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato", "Domenica"]
+
+# ============================================================================
+# ← SEZIONE NUOVA: FUNZIONI DI AUTENTICAZIONE
+# ============================================================================
+
+def hash_password(password):
+    """Crea hash della password"""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def verify_user(username, password):
+    """Verifica le credenziali utente"""
+    try:
+        worksheet = get_worksheet("Users")
+        if not worksheet:
+            return False
+        
+        records = worksheet.get_all_records()
+        for record in records:
+            if record.get('Username') == username:
+                stored_password = record.get('Password', '')
+                # Supporta sia password in chiaro (per migrazione) che hash
+                if stored_password == password or stored_password == hash_password(password):
+                    return True
+        return False
+    except Exception as e:
+        st.error(f"Errore verifica utente: {e}")
+        return False
+
+def get_user_full_name(username):
+    """Ottiene il nome completo dell'utente"""
+    try:
+        worksheet = get_worksheet("Users")
+        if not worksheet:
+            return username
+        
+        records = worksheet.get_all_records()
+        for record in records:
+            if record.get('Username') == username:
+                return record.get('Nome_Completo', username)
+        return username
+    except:
+        return username
+
+def show_login_page():
+    """Mostra la pagina di login"""
+    st.title("🔐 Login - Workout Tracker")
+    
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.markdown("### Accedi al tuo account")
+        
+        username = st.text_input("Username", key="login_username")
+        password = st.text_input("Password", type="password", key="login_password")
+        
+        col_btn1, col_btn2 = st.columns(2)
+        with col_btn1:
+            if st.button("🔓 Accedi", use_container_width=True):
+                if verify_user(username, password):
+                    st.session_state.logged_in = True
+                    st.session_state.current_user = username
+                    st.session_state.user_full_name = get_user_full_name(username)
+                    st.rerun()
+                else:
+                    st.error("❌ Username o password errati")
+        
+        with col_btn2:
+            if st.button("📝 Registrati", use_container_width=True):
+                st.session_state.show_register = True
+                st.rerun()
+
+def show_register_page():
+    """Mostra la pagina di registrazione"""
+    st.title("📝 Registrazione - Workout Tracker")
+    
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.markdown("### Crea un nuovo account")
+        
+        new_username = st.text_input("Username (sarà visibile)", key="reg_username")
+        new_full_name = st.text_input("Nome Completo", key="reg_fullname")
+        new_password = st.text_input("Password", type="password", key="reg_password")
+        new_password_confirm = st.text_input("Conferma Password", type="password", key="reg_password_confirm")
+        
+        col_btn1, col_btn2 = st.columns(2)
+        with col_btn1:
+            if st.button("✅ Registrati", use_container_width=True):
+                if not new_username or not new_full_name or not new_password:
+                    st.error("⚠️ Compila tutti i campi")
+                elif new_password != new_password_confirm:
+                    st.error("⚠️ Le password non coincidono")
+                elif len(new_password) < 6:
+                    st.error("⚠️ Password troppo corta (minimo 6 caratteri)")
+                else:
+                    # Verifica che username non esista già
+                    try:
+                        worksheet = get_worksheet("Users")
+                        records = worksheet.get_all_records()
+                        if any(r.get('Username') == new_username for r in records):
+                            st.error("⚠️ Username già esistente")
+                        else:
+                            # Aggiungi nuovo utente
+                            new_row = [new_username, new_password, new_full_name]
+                            worksheet.append_row(new_row)
+                            st.success("✅ Registrazione completata! Effettua il login.")
+                            st.session_state.show_register = False
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Errore durante la registrazione: {e}")
+        
+        with col_btn2:
+            if st.button("🔙 Torna al Login", use_container_width=True):
+                st.session_state.show_register = False
+                st.rerun()
+
+# ============================================================================
+# ← FINE SEZIONE NUOVA
+# ============================================================================
 
 # --- CONNESSIONE GOOGLE SHEETS ---
 @st.cache_resource
@@ -59,20 +177,32 @@ def get_worksheet(sheet_name):
 def save_template_to_sheets():
     """Salva il template su Google Sheets"""
     try:
+        username = st.session_state.current_user  # ← AGGIUNTO
         worksheet = get_worksheet("Template")
         if not worksheet:
             return False
         
-        worksheet.clear()
-        worksheet.update('A1', [['Giorno', 'Esercizio_JSON']])
+        # ← MODIFICATO: Elimina solo i dati dell'utente corrente
+        all_records = worksheet.get_all_records()
+        other_users_data = [r for r in all_records if r.get('Username') != username]
         
+        worksheet.clear()
+        worksheet.update('A1', [['Username', 'Giorno', 'Esercizio_JSON']])  # ← MODIFICATO: aggiunto Username
+        
+        # Riscrivi i dati degli altri utenti
+        if other_users_data:
+            rows = [[r['Username'], r['Giorno'], r['Esercizio_JSON']] for r in other_users_data]
+            worksheet.update(f'A2:C{len(rows)+1}', rows)
+        
+        # Aggiungi i dati dell'utente corrente
         data = []
         for day, exercises in st.session_state.workout_template.items():
             if exercises:
-                data.append([day, json.dumps(exercises, ensure_ascii=False)])
+                data.append([username, day, json.dumps(exercises, ensure_ascii=False)])  # ← MODIFICATO
         
         if data:
-            worksheet.update(f'A2:B{len(data)+1}', data)
+            start_row = len(other_users_data) + 2
+            worksheet.update(f'A{start_row}:C{start_row + len(data) - 1}', data)  # ← MODIFICATO
         
         return True
     except Exception as e:
@@ -82,6 +212,7 @@ def save_template_to_sheets():
 def load_template_from_sheets():
     """Carica il template da Google Sheets"""
     try:
+        username = st.session_state.current_user  # ← AGGIUNTO
         worksheet = get_worksheet("Template")
         if not worksheet:
             return False
@@ -89,11 +220,13 @@ def load_template_from_sheets():
         records = worksheet.get_all_records()
         st.session_state.workout_template = {day: [] for day in GIORNI}
         
+        # ← MODIFICATO: Filtra solo i dati dell'utente corrente
         for record in records:
-            day = record.get('Giorno')
-            exercises_json = record.get('Esercizio_JSON')
-            if day and exercises_json:
-                st.session_state.workout_template[day] = json.loads(exercises_json)
+            if record.get('Username') == username:  # ← AGGIUNTO
+                day = record.get('Giorno')
+                exercises_json = record.get('Esercizio_JSON')
+                if day and exercises_json:
+                    st.session_state.workout_template[day] = json.loads(exercises_json)
         
         return True
     except Exception as e:
@@ -103,13 +236,24 @@ def load_template_from_sheets():
 def save_config_to_sheets():
     """Salva la configurazione (data inizio scheda)"""
     try:
+        username = st.session_state.current_user  # ← AGGIUNTO
         worksheet = get_worksheet("Config")
         if not worksheet:
             return False
         
+        # ← MODIFICATO: Gestisci dati multi-utente
+        all_records = worksheet.get_all_records()
+        other_users_data = [r for r in all_records if r.get('Username') != username]
+        
         worksheet.clear()
-        worksheet.update('A1', [['Chiave', 'Valore']])
-        worksheet.update('A2', [['data_inizio_scheda', st.session_state.data_inizio_scheda]])
+        worksheet.update('A1', [['Username', 'Chiave', 'Valore']])  # ← MODIFICATO
+        
+        if other_users_data:
+            rows = [[r['Username'], r['Chiave'], r['Valore']] for r in other_users_data]
+            worksheet.update(f'A2:C{len(rows)+1}', rows)
+        
+        start_row = len(other_users_data) + 2
+        worksheet.update(f'A{start_row}', [[username, 'data_inizio_scheda', st.session_state.data_inizio_scheda]])  # ← MODIFICATO
         
         return True
     except Exception as e:
@@ -119,13 +263,15 @@ def save_config_to_sheets():
 def load_config_from_sheets():
     """Carica la configurazione"""
     try:
+        username = st.session_state.current_user  # ← AGGIUNTO
         worksheet = get_worksheet("Config")
         if not worksheet:
             return False
         
         records = worksheet.get_all_records()
+        # ← MODIFICATO: Filtra per utente
         for record in records:
-            if record.get('Chiave') == 'data_inizio_scheda':
+            if record.get('Username') == username and record.get('Chiave') == 'data_inizio_scheda':  # ← MODIFICATO
                 st.session_state.data_inizio_scheda = record.get('Valore', '')
         
         return True
@@ -136,16 +282,26 @@ def load_config_from_sheets():
 def save_history_to_sheets():
     """Salva lo storico su Google Sheets"""
     try:
+        username = st.session_state.current_user  # ← AGGIUNTO
         worksheet = get_worksheet("History")
         if not worksheet:
             return False
         
+        # ← MODIFICATO: Gestisci dati multi-utente
+        all_records = worksheet.get_all_records()
+        other_users_data = [r for r in all_records if r.get('Username') != username]
+        
         worksheet.clear()
-        worksheet.update('A1', [['Data', 'Giorno', 'Settimana', 'Esercizi_JSON']])
+        worksheet.update('A1', [['Username', 'Data', 'Giorno', 'Settimana', 'Esercizi_JSON']])  # ← MODIFICATO
+        
+        if other_users_data:
+            rows = [[r['Username'], r['Data'], r['Giorno'], r['Settimana'], r['Esercizi_JSON']] for r in other_users_data]
+            worksheet.update(f'A2:E{len(rows)+1}', rows)
         
         data = []
         for session in st.session_state.workout_history:
             data.append([
+                username,  # ← AGGIUNTO
                 session['data'],
                 session['giorno'],
                 session.get('settimana', 1),
@@ -153,16 +309,18 @@ def save_history_to_sheets():
             ])
         
         if data:
-            worksheet.update(f'A2:D{len(data)+1}', data)
+            start_row = len(other_users_data) + 2
+            worksheet.update(f'A{start_row}:E{start_row + len(data) - 1}', data)  # ← MODIFICATO
         
         return True
     except Exception as e:
         st.error(f"Errore salvataggio storico: {e}")
         return False
-
+        
 def load_history_from_sheets():
     """Carica lo storico da Google Sheets"""
     try:
+        username = st.session_state.current_user  # ← AGGIUNTO
         worksheet = get_worksheet("History")
         if not worksheet:
             return False
@@ -170,14 +328,16 @@ def load_history_from_sheets():
         records = worksheet.get_all_records()
         st.session_state.workout_history = []
         
+        # ← MODIFICATO: Filtra per utente
         for record in records:
-            session = {
-                'data': record.get('Data'),
-                'giorno': record.get('Giorno'),
-                'settimana': record.get('Settimana', 1),
-                'esercizi': json.loads(record.get('Esercizi_JSON', '[]'))
-            }
-            st.session_state.workout_history.append(session)
+            if record.get('Username') == username:  # ← AGGIUNTO
+                session = {
+                    'data': record.get('Data'),
+                    'giorno': record.get('Giorno'),
+                    'settimana': record.get('Settimana', 1),
+                    'esercizi': json.loads(record.get('Esercizi_JSON', '[]'))
+                }
+                st.session_state.workout_history.append(session)
         
         return True
     except Exception as e:
@@ -204,22 +364,30 @@ def calculate_current_week(start_date_str, current_date):
     """Calcola la settimana corrente (1-6) basandosi sulla data di inizio"""
     try:
         start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
-        
-        # Trova il lunedì della settimana in cui cade start_date
-        # weekday() restituisce 0=lunedì, 6=domenica
         days_since_monday = start_date.weekday()
         monday_of_start_week = start_date - timedelta(days=days_since_monday)
-        
-        # Calcola quante settimane sono passate dal lunedì iniziale
         delta_days = (current_date - monday_of_start_week).days
         week_number = (delta_days // 7) % 6 + 1
-        
         return week_number
     except:
         return 1
 
 def init_session_state():
     """Inizializza la struttura dati"""
+    # ← MODIFICATO: Aggiunti campi di autenticazione
+    if 'logged_in' not in st.session_state:
+        st.session_state.logged_in = False
+    
+    if 'current_user' not in st.session_state:
+        st.session_state.current_user = None
+    
+    if 'user_full_name' not in st.session_state:
+        st.session_state.user_full_name = None
+    
+    if 'show_register' not in st.session_state:
+        st.session_state.show_register = False
+    
+    # ← RESTO INVARIATO
     if 'workout_template' not in st.session_state:
         st.session_state.workout_template = {day: [] for day in GIORNI}
     
@@ -227,9 +395,10 @@ def init_session_state():
         st.session_state.workout_history = []
     
     if 'data_inizio_scheda' not in st.session_state:
-        st.session_state.data_inizio_scheda = "2025-11-03"  # Data di default: 3/11/2025
+        st.session_state.data_inizio_scheda = "2025-11-03"
     
-    if 'data_loaded' not in st.session_state:
+    # ← MODIFICATO: Carica dati solo se loggato
+    if 'data_loaded' not in st.session_state and st.session_state.logged_in:
         load_all_data()
         st.session_state.data_loaded = True
 
@@ -297,8 +466,26 @@ def get_last_weight_for_exercise(exercise_name):
 # Inizializza
 init_session_state()
 
+if not st.session_state.logged_in:
+    if st.session_state.get('show_register', False):
+        show_register_page()
+    else:
+        show_login_page()
+    st.stop()  # ← Blocca l'esecuzione se non loggato
+    
 # Sidebar
 st.sidebar.title("💪 Workout Tracker")
+
+# ← AGGIUNTO: Info utente e logout
+st.sidebar.markdown(f"👤 **{st.session_state.user_full_name}**")
+if st.sidebar.button("🚪 Logout"):
+    st.session_state.logged_in = False
+    st.session_state.current_user = None
+    st.session_state.user_full_name = None
+    st.session_state.data_loaded = False
+    st.rerun()
+
+st.sidebar.markdown("---")
 
 # Configurazione Data Inizio Scheda
 st.sidebar.markdown("### ⚙️ Configurazione Scheda")
