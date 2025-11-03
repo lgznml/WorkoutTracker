@@ -175,40 +175,46 @@ def get_worksheet(sheet_name):
         return None
 
 def save_template_to_sheets():
-    """Salva il template su Google Sheets"""
+    """Salva il template su Google Sheets - SAFE per multi-utente"""
     try:
-        username = st.session_state.current_user  # ← AGGIUNTO
+        username = st.session_state.current_user
         worksheet = get_worksheet("Template")
         if not worksheet:
             return False
         
-        # ← MODIFICATO: Elimina solo i dati dell'utente corrente
+        # Assicurati che esista l'header
+        try:
+            headers = worksheet.row_values(1)
+            if not headers or headers[0] != 'Username':
+                worksheet.update('A1', [['Username', 'Giorno', 'Esercizio_JSON']])
+        except:
+            worksheet.update('A1', [['Username', 'Giorno', 'Esercizio_JSON']])
+        
+        # Trova tutte le righe dell'utente corrente e eliminale
         all_records = worksheet.get_all_records()
-        other_users_data = [r for r in all_records if r.get('Username') != username]
+        rows_to_delete = []
+        for i, record in enumerate(all_records, start=2):  # start=2 perché row 1 è l'header
+            if record.get('Username') == username:
+                rows_to_delete.append(i)
         
-        worksheet.clear()
-        worksheet.update('A1', [['Username', 'Giorno', 'Esercizio_JSON']])  # ← MODIFICATO: aggiunto Username
+        # Elimina le righe dell'utente dall'alto verso il basso (per non sballare gli indici)
+        for row_idx in sorted(rows_to_delete, reverse=True):
+            worksheet.delete_rows(row_idx)
         
-        # Riscrivi i dati degli altri utenti
-        if other_users_data:
-            rows = [[r['Username'], r['Giorno'], r['Esercizio_JSON']] for r in other_users_data]
-            worksheet.update(f'A2:C{len(rows)+1}', rows)
-        
-        # Aggiungi i dati dell'utente corrente
+        # Aggiungi i nuovi dati dell'utente
         data = []
         for day, exercises in st.session_state.workout_template.items():
             if exercises:
-                data.append([username, day, json.dumps(exercises, ensure_ascii=False)])  # ← MODIFICATO
+                data.append([username, day, json.dumps(exercises, ensure_ascii=False)])
         
         if data:
-            start_row = len(other_users_data) + 2
-            worksheet.update(f'A{start_row}:C{start_row + len(data) - 1}', data)  # ← MODIFICATO
+            worksheet.append_rows(data)
         
         return True
     except Exception as e:
         st.error(f"Errore salvataggio template: {e}")
         return False
-
+        
 def load_template_from_sheets():
     """Carica il template da Google Sheets"""
     try:
@@ -234,26 +240,35 @@ def load_template_from_sheets():
         return False
 
 def save_config_to_sheets():
-    """Salva la configurazione (data inizio scheda)"""
+    """Salva la configurazione (data inizio scheda) - SAFE per multi-utente"""
     try:
-        username = st.session_state.current_user  # ← AGGIUNTO
+        username = st.session_state.current_user
         worksheet = get_worksheet("Config")
         if not worksheet:
             return False
         
-        # ← MODIFICATO: Gestisci dati multi-utente
+        # Assicurati che esista l'header
+        try:
+            headers = worksheet.row_values(1)
+            if not headers or headers[0] != 'Username':
+                worksheet.update('A1', [['Username', 'Chiave', 'Valore']])
+        except:
+            worksheet.update('A1', [['Username', 'Chiave', 'Valore']])
+        
+        # Trova la riga dell'utente corrente per 'data_inizio_scheda'
         all_records = worksheet.get_all_records()
-        other_users_data = [r for r in all_records if r.get('Username') != username]
+        row_to_update = None
+        for i, record in enumerate(all_records, start=2):
+            if record.get('Username') == username and record.get('Chiave') == 'data_inizio_scheda':
+                row_to_update = i
+                break
         
-        worksheet.clear()
-        worksheet.update('A1', [['Username', 'Chiave', 'Valore']])  # ← MODIFICATO
-        
-        if other_users_data:
-            rows = [[r['Username'], r['Chiave'], r['Valore']] for r in other_users_data]
-            worksheet.update(f'A2:C{len(rows)+1}', rows)
-        
-        start_row = len(other_users_data) + 2
-        worksheet.update(f'A{start_row}', [[username, 'data_inizio_scheda', st.session_state.data_inizio_scheda]])  # ← MODIFICATO
+        # Aggiorna o aggiungi
+        if row_to_update:
+            worksheet.update(f'A{row_to_update}:C{row_to_update}', 
+                           [[username, 'data_inizio_scheda', st.session_state.data_inizio_scheda]])
+        else:
+            worksheet.append_row([username, 'data_inizio_scheda', st.session_state.data_inizio_scheda])
         
         return True
     except Exception as e:
@@ -280,28 +295,37 @@ def load_config_from_sheets():
         return False
 
 def save_history_to_sheets():
-    """Salva lo storico su Google Sheets"""
+    """Salva lo storico su Google Sheets - SAFE per multi-utente"""
     try:
-        username = st.session_state.current_user  # ← AGGIUNTO
+        username = st.session_state.current_user
         worksheet = get_worksheet("History")
         if not worksheet:
             return False
         
-        # ← MODIFICATO: Gestisci dati multi-utente
+        # Assicurati che esista l'header
+        try:
+            headers = worksheet.row_values(1)
+            if not headers or headers[0] != 'Username':
+                worksheet.update('A1', [['Username', 'Data', 'Giorno', 'Settimana', 'Esercizi_JSON']])
+        except:
+            worksheet.update('A1', [['Username', 'Data', 'Giorno', 'Settimana', 'Esercizi_JSON']])
+        
+        # Trova tutte le righe dell'utente corrente e eliminale
         all_records = worksheet.get_all_records()
-        other_users_data = [r for r in all_records if r.get('Username') != username]
+        rows_to_delete = []
+        for i, record in enumerate(all_records, start=2):
+            if record.get('Username') == username:
+                rows_to_delete.append(i)
         
-        worksheet.clear()
-        worksheet.update('A1', [['Username', 'Data', 'Giorno', 'Settimana', 'Esercizi_JSON']])  # ← MODIFICATO
+        # Elimina le righe dell'utente dall'alto verso il basso
+        for row_idx in sorted(rows_to_delete, reverse=True):
+            worksheet.delete_rows(row_idx)
         
-        if other_users_data:
-            rows = [[r['Username'], r['Data'], r['Giorno'], r['Settimana'], r['Esercizi_JSON']] for r in other_users_data]
-            worksheet.update(f'A2:E{len(rows)+1}', rows)
-        
+        # Aggiungi tutti gli allenamenti dell'utente
         data = []
         for session in st.session_state.workout_history:
             data.append([
-                username,  # ← AGGIUNTO
+                username,
                 session['data'],
                 session['giorno'],
                 session.get('settimana', 1),
@@ -309,8 +333,7 @@ def save_history_to_sheets():
             ])
         
         if data:
-            start_row = len(other_users_data) + 2
-            worksheet.update(f'A{start_row}:E{start_row + len(data) - 1}', data)  # ← MODIFICATO
+            worksheet.append_rows(data)
         
         return True
     except Exception as e:
