@@ -466,6 +466,77 @@ def load_config_from_sheets():
         st.error(f"Errore caricamento config: {e}")
         return False
 
+def save_weight_calories_to_sheets():
+    """Salva lo storico peso e calorie su Google Sheets"""
+    try:
+        username = st.session_state.current_user
+        worksheet = get_worksheet("WeightCalories")
+        if not worksheet:
+            return False
+        
+        # Assicurati che esista l'header
+        try:
+            headers = worksheet.row_values(1)
+            if not headers or headers[0] != 'Username':
+                worksheet.update('A1', [['Username', 'Data', 'Peso', 'Calorie']])
+        except:
+            worksheet.update('A1', [['Username', 'Data', 'Peso', 'Calorie']])
+        
+        # Trova tutte le righe dell'utente corrente e eliminale
+        all_records = worksheet.get_all_records()
+        rows_to_delete = []
+        for i, record in enumerate(all_records, start=2):
+            if record.get('Username') == username:
+                rows_to_delete.append(i)
+        
+        # Elimina le righe dell'utente dall'alto verso il basso
+        for row_idx in sorted(rows_to_delete, reverse=True):
+            worksheet.delete_rows(row_idx)
+        
+        # Aggiungi tutti i dati dell'utente
+        data = []
+        for entry in st.session_state.weight_calories_history:
+            data.append([
+                username,
+                entry['data'],
+                entry['peso'],
+                entry['calorie']
+            ])
+        
+        if data:
+            worksheet.append_rows(data)
+        
+        return True
+    except Exception as e:
+        st.error(f"Errore salvataggio peso/calorie: {e}")
+        return False
+
+def load_weight_calories_from_sheets():
+    """Carica lo storico peso e calorie da Google Sheets"""
+    try:
+        username = st.session_state.current_user
+        worksheet = get_worksheet("WeightCalories")
+        if not worksheet:
+            return False
+        
+        records = worksheet.get_all_records()
+        st.session_state.weight_calories_history = []
+        
+        # Filtra per utente
+        for record in records:
+            if record.get('Username') == username:
+                entry = {
+                    'data': record.get('Data'),
+                    'peso': record.get('Peso', ''),
+                    'calorie': record.get('Calorie', '')
+                }
+                st.session_state.weight_calories_history.append(entry)
+        
+        return True
+    except Exception as e:
+        st.error(f"Errore caricamento peso/calorie: {e}")
+        return False
+        
 def save_history_to_sheets():
     """Salva lo storico su Google Sheets - SAFE per multi-utente"""
     try:
@@ -545,6 +616,7 @@ def save_all_data():
     success = save_template_to_sheets() and success
     success = save_history_to_sheets() and success
     success = save_config_to_sheets() and success
+    success = save_weight_calories_to_sheets() and success
     return success
 
 def load_all_data():
@@ -553,6 +625,7 @@ def load_all_data():
     success = load_template_from_sheets() and success
     success = load_history_from_sheets() and success
     success = load_config_from_sheets() and success
+    success = load_weight_calories_from_sheets() and success
     return success
 
 def calculate_current_week(start_date_str, current_date):
@@ -606,7 +679,10 @@ def init_session_state():
     
     if 'data_inizio_scheda' not in st.session_state:
         st.session_state.data_inizio_scheda = "2025-11-03"
-    
+
+    if 'weight_calories_history' not in st.session_state:
+        st.session_state.weight_calories_history = []
+        
     # ← MODIFICATO: Carica dati solo se loggato
     if 'data_loaded' not in st.session_state and st.session_state.logged_in:
         load_all_data()
@@ -716,6 +792,7 @@ if st.sidebar.button("🚪 Logout"):
     # Pulisci tutti i dati dell'utente precedente
     st.session_state.workout_template = {day: [] for day in GIORNI}
     st.session_state.workout_history = []
+    st.session_state.weight_calories_history = []  # ← AGGIUNGERE QUESTA RIGA
     st.session_state.data_inizio_scheda = "2025-11-03"
     st.rerun()
 
@@ -753,7 +830,8 @@ menu = st.sidebar.radio("Menu", [
     "📋 Scheda Allenamento",
     "✍️ Registra Allenamento",
     "📅 Storico",
-    "📈 Progressione"
+    "📈 Progressione",
+    "⚖️ Peso e Calorie"
 ])
 
 # Salva/Carica
@@ -1138,6 +1216,185 @@ elif menu == "📈 Progressione":
             
             df = pd.DataFrame(detail_data)
             st.dataframe(df, use_container_width=True, hide_index=True)
+
+    # --- PESO E CALORIE ---
+elif menu == "⚖️ Peso e Calorie":
+    st.title("⚖️ Storico Peso e Calorie")
+    
+    st.markdown("### 📝 Inserisci Nuovo Dato")
+    
+    with st.form("weight_calories_form"):
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            entry_date = st.date_input("Data", value=date.today())
+        
+        with col2:
+            peso = st.number_input("Peso (kg)", min_value=0.0, max_value=300.0, step=0.1, format="%.1f")
+        
+        with col3:
+            calorie = st.number_input("Calorie", min_value=0, max_value=10000, step=50)
+        
+        submitted = st.form_submit_button("💾 Salva", use_container_width=True)
+        
+        if submitted:
+            date_str = entry_date.strftime("%Y-%m-%d")
+            
+            # Rimuovi eventuale dato già esistente per questa data
+            st.session_state.weight_calories_history = [
+                e for e in st.session_state.weight_calories_history 
+                if e['data'] != date_str
+            ]
+            
+            # Aggiungi nuovo dato
+            new_entry = {
+                'data': date_str,
+                'peso': str(peso) if peso > 0 else '',
+                'calorie': str(calorie) if calorie > 0 else ''
+            }
+            st.session_state.weight_calories_history.append(new_entry)
+            
+            save_all_data()
+            st.success("✅ Dati salvati!")
+            st.rerun()
+    
+    st.markdown("---")
+    
+    if not st.session_state.weight_calories_history:
+        st.info("Nessun dato registrato. Inserisci peso e calorie per iniziare!")
+    else:
+        # Ordina per data
+        history = sorted(st.session_state.weight_calories_history, key=lambda x: x['data'])
+        
+        # Prepara dati per i grafici
+        dates = [h['data'] for h in history]
+        weights = []
+        calories = []
+        
+        for h in history:
+            try:
+                weights.append(float(h['peso']) if h['peso'] else None)
+            except:
+                weights.append(None)
+            
+            try:
+                calories.append(int(h['calorie']) if h['calorie'] else None)
+            except:
+                calories.append(None)
+        
+        # Grafico Peso
+        st.subheader("📊 Andamento Peso")
+        fig_weight = go.Figure()
+        
+        valid_weights = [(d, w) for d, w in zip(dates, weights) if w is not None]
+        if valid_weights:
+            valid_dates_w, valid_weight_values = zip(*valid_weights)
+            
+            fig_weight.add_trace(go.Scatter(
+                x=valid_dates_w,
+                y=valid_weight_values,
+                mode='lines+markers',
+                name='Peso',
+                line=dict(color='#3498db', width=3),
+                marker=dict(size=10),
+                hovertemplate='<b>%{x}</b><br>Peso: %{y:.1f} kg<extra></extra>'
+            ))
+            
+            fig_weight.update_layout(
+                xaxis_title="Data",
+                yaxis_title="Peso (kg)",
+                hovermode='x unified',
+                template='plotly_white',
+                height=400
+            )
+            
+            st.plotly_chart(fig_weight, use_container_width=True)
+            
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Peso Iniziale", f"{valid_weight_values[0]:.1f} kg")
+            with col2:
+                st.metric("Peso Attuale", f"{valid_weight_values[-1]:.1f} kg")
+            with col3:
+                diff = valid_weight_values[-1] - valid_weight_values[0]
+                st.metric("Variazione", f"{diff:+.1f} kg")
+            with col4:
+                avg = sum(valid_weight_values) / len(valid_weight_values)
+                st.metric("Media", f"{avg:.1f} kg")
+        else:
+            st.info("Nessun dato di peso registrato")
+        
+        st.markdown("---")
+        
+        # Grafico Calorie
+        st.subheader("🍽️ Andamento Calorie")
+        fig_calories = go.Figure()
+        
+        valid_calories = [(d, c) for d, c in zip(dates, calories) if c is not None]
+        if valid_calories:
+            valid_dates_c, valid_calorie_values = zip(*valid_calories)
+            
+            fig_calories.add_trace(go.Scatter(
+                x=valid_dates_c,
+                y=valid_calorie_values,
+                mode='lines+markers',
+                name='Calorie',
+                line=dict(color='#e74c3c', width=3),
+                marker=dict(size=10),
+                fill='tozeroy',
+                fillcolor='rgba(231, 76, 60, 0.2)',
+                hovertemplate='<b>%{x}</b><br>Calorie: %{y}<extra></extra>'
+            ))
+            
+            fig_calories.update_layout(
+                xaxis_title="Data",
+                yaxis_title="Calorie",
+                hovermode='x unified',
+                template='plotly_white',
+                height=400
+            )
+            
+            st.plotly_chart(fig_calories, use_container_width=True)
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                avg_cal = sum(valid_calorie_values) / len(valid_calorie_values)
+                st.metric("Media Calorie", f"{avg_cal:.0f}")
+            with col2:
+                st.metric("Minimo", f"{min(valid_calorie_values)}")
+            with col3:
+                st.metric("Massimo", f"{max(valid_calorie_values)}")
+        else:
+            st.info("Nessun dato di calorie registrato")
+        
+        st.markdown("---")
+        
+        # Tabella dettagli
+        st.subheader("📋 Dettagli")
+        detail_data = []
+        for h in reversed(history):  # Mostra dal più recente
+            detail_data.append({
+                "Data": h['data'],
+                "Peso (kg)": h['peso'] if h['peso'] else '-',
+                "Calorie": h['calorie'] if h['calorie'] else '-'
+            })
+        
+        df = pd.DataFrame(detail_data)
+        st.dataframe(df, use_container_width=True, hide_index=True)
+        
+        # Pulsante per eliminare tutti i dati
+        st.markdown("---")
+        if st.button("🗑️ Elimina Tutti i Dati Peso/Calorie", type="secondary"):
+            if st.session_state.get('confirm_delete_wc', False):
+                st.session_state.weight_calories_history = []
+                save_all_data()
+                st.session_state.confirm_delete_wc = False
+                st.success("✅ Tutti i dati sono stati eliminati!")
+                st.rerun()
+            else:
+                st.session_state.confirm_delete_wc = True
+                st.warning("⚠️ Clicca di nuovo per confermare l'eliminazione")
+                st.rerun()
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("💪 **Workout Tracker v3.0**")
