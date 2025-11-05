@@ -109,7 +109,7 @@ def generate_or_get_device_id():
                             }
                         }, '*');
                     }
-                }, 100);
+                }, 5000);
             })();
         </script>
     </body>
@@ -138,14 +138,14 @@ def generate_or_get_device_id():
     
     # Se arriviamo qui, il componente non ha ancora restituito il valore
     # Usa un fallback TEMPORANEO e prova a ricaricare
-    if st.session_state.device_load_attempt < 2:
+    if st.session_state.device_load_attempt < 5:  # ← MODIFICATO: da 2 a 5
         st.session_state.device_load_attempt += 1
         # Non salvare il fallback, forza un rerun per riprovare
         import uuid
         temp_id = f"loading-{str(uuid.uuid4())}"
         return temp_id
     else:
-        # Dopo 2 tentativi, usa un fallback permanente
+        # Dopo 5 tentativi, usa un fallback permanente  # ← MODIFICATO: da 2 a 5
         import uuid
         fallback_id = f"fallback-{str(uuid.uuid4())}"
         st.session_state.device_id = fallback_id
@@ -393,6 +393,14 @@ def show_login_page():
         st.code(f"Device ID completo: {device_id}")
         st.code(f"Tentativi di caricamento: {st.session_state.get('device_load_attempt', 0)}")
         st.code(f"Device ID caricato: {st.session_state.get('device_id_loaded', False)}")
+        
+        # Test localStorage
+        test_result = test_device_persistence()
+        if test_result:
+            if test_result.get('localStorageWorks'):
+                st.success("✅ localStorage funzionante")
+            else:
+                st.error(f"❌ localStorage non disponibile: {test_result.get('error', 'Errore sconosciuto')}")
     
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
