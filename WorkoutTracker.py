@@ -109,7 +109,7 @@ def generate_or_get_device_id():
                             }
                         }, '*');
                     }
-                }, 5000);
+                }, 250);
             })();
         </script>
     </body>
@@ -138,14 +138,14 @@ def generate_or_get_device_id():
     
     # Se arriviamo qui, il componente non ha ancora restituito il valore
     # Usa un fallback TEMPORANEO e prova a ricaricare
-    if st.session_state.device_load_attempt < 5:  # ← MODIFICATO: da 2 a 5
+    if st.session_state.device_load_attempt < 5:
         st.session_state.device_load_attempt += 1
         # Non salvare il fallback, forza un rerun per riprovare
         import uuid
         temp_id = f"loading-{str(uuid.uuid4())}"
         return temp_id
     else:
-        # Dopo 5 tentativi, usa un fallback permanente  # ← MODIFICATO: da 2 a 5
+        # Dopo 5 tentativi, usa un fallback permanente
         import uuid
         fallback_id = f"fallback-{str(uuid.uuid4())}"
         st.session_state.device_id = fallback_id
