@@ -19,11 +19,75 @@ GIORNI = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato",
 # ============================================================================
 
 def generate_or_get_device_id():
-    """Genera un deviceId persistente salvato solo su Google Sheets"""
-    # Usa un identificatore univoco basato sul browser (simulato con session_state per Streamlit)
+    """Genera o recupera un deviceId persistente dal localStorage del browser"""
     if 'device_id' not in st.session_state:
-        import uuid
-        st.session_state.device_id = str(uuid.uuid4())
+        # Recupera o genera il device_id tramite localStorage
+        result = components.html("""
+        <!DOCTYPE html>
+        <html>
+        <body>
+        <script>
+            (function(){
+                try {
+                    function getOrCreateDeviceId() {
+                        try {
+                            if (crypto && crypto.randomUUID) {
+                                var id = localStorage.getItem('workout_device_id');
+                                if (!id) {
+                                    id = crypto.randomUUID();
+                                    localStorage.setItem('workout_device_id', id);
+                                }
+                                return id;
+                            } else {
+                                var id = localStorage.getItem('workout_device_id');
+                                if (!id) {
+                                    id = 'dev-' + Math.random().toString(36).slice(2) + '-' + Date.now().toString(36);
+                                    localStorage.setItem('workout_device_id', id);
+                                }
+                                return id;
+                            }
+                        } catch(e) {
+                            var id = localStorage.getItem('workout_device_id');
+                            if (!id) {
+                                id = 'dev-' + Math.random().toString(36).slice(2) + '-' + Date.now().toString(36);
+                                try {
+                                    localStorage.setItem('workout_device_id', id);
+                                } catch(storageError) {
+                                    console.error('Cannot save to localStorage:', storageError);
+                                }
+                            }
+                            return id;
+                        }
+                    }
+                    
+                    var deviceId = getOrCreateDeviceId();
+                    
+                    window.parent.postMessage({
+                        type: 'streamlit:setComponentValue',
+                        data: { deviceId: deviceId }
+                    }, '*');
+                } catch (e) {
+                    console.error('Error getting device ID:', e);
+                    // Fallback: genera ID temporaneo
+                    var fallbackId = 'temp-' + Math.random().toString(36).slice(2);
+                    window.parent.postMessage({
+                        type: 'streamlit:setComponentValue',
+                        data: { deviceId: fallbackId }
+                    }, '*');
+                }
+            })();
+        </script>
+        </body>
+        </html>
+        """, height=0)
+        
+        if result and isinstance(result, dict) and result.get('deviceId'):
+            st.session_state.device_id = result['deviceId']
+        else:
+            # Fallback se il componente HTML fallisce
+            import uuid
+            st.session_state.device_id = f"fallback-{str(uuid.uuid4())}"
+    
     return st.session_state.device_id
     
 
@@ -131,6 +195,47 @@ def disable_auto_login_for_device(device_id):
         st.error(f"Errore disabilitazione auto-login: {e}")
         return False
 
+def test_device_persistence():
+    """Testa se il localStorage funziona correttamente"""
+    result = components.html("""
+    <!DOCTYPE html>
+    <html>
+    <body>
+    <script>
+        (function(){
+            try {
+                // Test localStorage
+                var testKey = 'workout_test_' + Date.now();
+                localStorage.setItem(testKey, 'test');
+                var retrieved = localStorage.getItem(testKey);
+                localStorage.removeItem(testKey);
+                
+                var works = (retrieved === 'test');
+                
+                window.parent.postMessage({
+                    type: 'streamlit:setComponentValue',
+                    data: { 
+                        localStorageWorks: works,
+                        error: null
+                    }
+                }, '*');
+            } catch (e) {
+                window.parent.postMessage({
+                    type: 'streamlit:setComponentValue',
+                    data: { 
+                        localStorageWorks: false,
+                        error: e.message
+                    }
+                }, '*');
+            }
+        })();
+    </script>
+    </body>
+    </html>
+    """, height=0)
+    
+    return result
+    
 def verify_user(username, password):
     """Verifica le credenziali utente"""
     try:
@@ -166,33 +271,50 @@ def get_user_full_name(username):
         return username
 
 def show_login_page():
-    """Mostra la pagina di login"""
+    """Mostra la pagina di login con auto-login basato su device"""
     
-    # CONTROLLA DEVICE MAPPING su Google Sheets
+    # STEP 1: Ottieni il device_id (questo caricherà il componente HTML)
+    device_id = generate_or_get_device_id()
+    
+    # STEP 2: Controlla auto-login SOLO se non è già stato fatto in questa sessione
     if not st.session_state.get('login_check_done', False):
+        # Mostra spinner mentre controlla
         with st.spinner("🔄 Controllo sessione..."):
-            device_id = generate_or_get_device_id()
-            mapping = load_device_mapping_from_sheets(device_id)
-            
-            if mapping and mapping.get('auto_login') and mapping.get('username'):
-                mapped_user = mapping.get('username')
-                mapped_login_date = mapping.get('last_login')
+            # Attendi che il device_id sia caricato
+            if device_id and not device_id.startswith('temp-') and not device_id.startswith('fallback-'):
+                mapping = load_device_mapping_from_sheets(device_id)
                 
-                # Controlla scadenza 30 giorni
-                if not check_login_expiry(mapped_login_date):
-                    if verify_user_exists(mapped_user):
-                        # Auto-login
-                        st.session_state.logged_in = True
-                        st.session_state.current_user = mapped_user
-                        st.session_state.user_full_name = get_user_full_name(mapped_user)
-                        st.session_state.login_check_done = True
-                        st.success(f"✅ Accesso automatico: bentornato, {mapped_user}!")
-                        st.rerun()
+                if mapping and mapping.get('auto_login') and mapping.get('username'):
+                    mapped_user = mapping.get('username')
+                    mapped_login_date = mapping.get('last_login')
+                    
+                    # Controlla scadenza 30 giorni
+                    if not check_login_expiry(mapped_login_date):
+                        if verify_user_exists(mapped_user):
+                            # Auto-login riuscito
+                            st.session_state.logged_in = True
+                            st.session_state.current_user = mapped_user
+                            st.session_state.user_full_name = get_user_full_name(mapped_user)
+                            st.session_state.login_check_done = True
+                            st.success(f"✅ Accesso automatico: bentornato, {mapped_user}!")
+                            # Aggiorna la data di ultimo login
+                            save_device_mapping_to_sheets(device_id, mapped_user)
+                            st.rerun()
+                        else:
+                            # Utente non esiste più, disabilita auto-login
+                            disable_auto_login_for_device(device_id)
             
             st.session_state.login_check_done = True
     
-    # Mostra form di login
+    # STEP 3: Mostra form di login
     st.title("🔐 Login - Workout Tracker")
+    
+    # Mostra device ID per debug (puoi rimuovere in produzione)
+    if device_id:
+        with st.expander("🔧 Info Debug"):
+            st.code(f"Device ID: {device_id}")
+            if device_id.startswith('temp-') or device_id.startswith('fallback-'):
+                st.warning("⚠️ Device ID temporaneo - il localStorage potrebbe non essere disponibile (modalità privata?)")
     
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
@@ -203,17 +325,25 @@ def show_login_page():
         
         remember_me = st.checkbox("🔒 Ricordami per 30 giorni su questo dispositivo", value=True)
         
+        if remember_me and (device_id.startswith('temp-') or device_id.startswith('fallback-')):
+            st.warning("⚠️ Il tuo browser potrebbe essere in modalità privata. Il login persistente potrebbe non funzionare.")
+        
         col_btn1, col_btn2 = st.columns(2)
         with col_btn1:
             if st.button("🔓 Accedi", use_container_width=True):
-                if verify_user(username, password):
+                if not username or not password:
+                    st.error("⚠️ Inserisci username e password")
+                elif verify_user(username, password):
                     st.session_state.logged_in = True
                     st.session_state.current_user = username
                     st.session_state.user_full_name = get_user_full_name(username)
                     
-                    if remember_me:
-                        device_id = generate_or_get_device_id()
-                        save_device_mapping_to_sheets(device_id, username)
+                    if remember_me and device_id:
+                        # Salva la mappatura device->user
+                        if save_device_mapping_to_sheets(device_id, username):
+                            st.success("✅ Dispositivo registrato per auto-login")
+                        else:
+                            st.warning("⚠️ Impossibile salvare il dispositivo, ma l'accesso è riuscito")
                     
                     st.rerun()
                 else:
@@ -223,6 +353,9 @@ def show_login_page():
             if st.button("📝 Registrati", use_container_width=True):
                 st.session_state.show_register = True
                 st.rerun()
+        
+        st.markdown("---")
+        st.caption("💡 **Suggerimento:** Abilita 'Ricordami' per accedere automaticamente da questo dispositivo per 30 giorni")
 
 def show_register_page():
     """Mostra la pagina di registrazione"""
@@ -615,9 +748,8 @@ def init_session_state():
     if 'login_check_done' not in st.session_state:
         st.session_state.login_check_done = False
     
-    if 'device_id' not in st.session_state:
-        import uuid
-        st.session_state.device_id = str(uuid.uuid4())
+    # NON generare device_id qui - verrà generato da generate_or_get_device_id()
+    # quando necessario, per permettere al componente HTML di caricarsi correttamente
     
     if 'logged_in' not in st.session_state:
         st.session_state.logged_in = False
@@ -752,6 +884,29 @@ with col_logout2:
         device_id = st.session_state.get('device_id', 'Non disponibile')
         st.sidebar.info(f"**Device ID:**\n`{device_id[:8]}...`")
 
+# Nel blocco sidebar, dopo il logout
+if st.sidebar.button("🔍 Diagnosi Dispositivo"):
+    with st.sidebar:
+        st.markdown("### 🔧 Diagnostica")
+        device_id = st.session_state.get('device_id', 'Non disponibile')
+        st.code(f"Device ID:\n{device_id}", language=None)
+        
+        if device_id:
+            mapping = load_device_mapping_from_sheets(device_id)
+            if mapping:
+                st.success("✅ Dispositivo registrato")
+                st.json(mapping)
+            else:
+                st.warning("⚠️ Dispositivo non registrato")
+        
+        # Test localStorage
+        test_result = test_device_persistence()
+        if test_result:
+            if test_result.get('localStorageWorks'):
+                st.success("✅ localStorage funzionante")
+            else:
+                st.error(f"❌ localStorage non disponibile: {test_result.get('error', 'Errore sconosciuto')}")
+                
 st.sidebar.markdown("---")
 
 # Configurazione Data Inizio Scheda
