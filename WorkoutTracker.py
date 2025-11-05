@@ -19,83 +19,88 @@ GIORNI = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato",
 # ============================================================================
 
 def set_user_cookie(username):
-"""Imposta/aggiorna localStorage con username, login date e deviceId; ritorna il deviceId generato/letto."""
+    """Imposta/aggiorna localStorage con username, login date e deviceId; ritorna il deviceId generato/letto."""
     # Il componente JS restituisce un oggetto {username, loginDate, deviceId}
     result = components.html(f"""
-    <!DOCTYPE html>
-    <html>
-    <body>
-    <script>
-        (function(){
-            try {
-                // Genera o recupera deviceId
-                function getOrCreateDeviceId() {{
-                    try {{
-                        if (crypto && crypto.randomUUID) {{
-                            // browser moderni
-                            var id = localStorage.getItem('workout_device_id');
-                            if (!id) {{
-                                id = crypto.randomUUID();
-                                localStorage.setItem('workout_device_id', id);
+        <!DOCTYPE html>
+        <html>
+        <body>
+        <script>
+            (function(){{
+                try {{
+                    // Genera o recupera deviceId
+                    function getOrCreateDeviceId() {{
+                        try {{
+                            if (crypto && crypto.randomUUID) {{
+                                // browser moderni
+                                var id = localStorage.getItem('workout_device_id');
+                                if (!id) {{
+                                    id = crypto.randomUUID();
+                                    localStorage.setItem('workout_device_id', id);
+                                }}
+                                return id;
+                            }} else {{
+                                var id = localStorage.getItem('workout_device_id');
+                                if (!id) {{
+                                    id = 'dev-' + Math.random().toString(36).slice(2) + '-' + Date.now().toString(36);
+                                    localStorage.setItem('workout_device_id', id);
+                                }}
+                                return id;
                             }}
-                            return id;
-                        }} else {{
-                            var id = localStorage.getItem('workout_device_id');
-                            if (!id) {{
-                                id = 'dev-' + Math.random().toString(36).slice(2) + '-' + Date.now().toString(36);
-                                localStorage.setItem('workout_device_id', id);
-                            }}
+                        }} catch(e) {{
+                            var id = localStorage.getItem('workout_device_id') || ('dev-' + Math.random().toString(36).slice(2));
+                            localStorage.setItem('workout_device_id', id);
                             return id;
                         }}
-                    }} catch(e) {{
-                        var id = localStorage.getItem('workout_device_id') || ('dev-' + Math.random().toString(36).slice(2));
-                        localStorage.setItem('workout_device_id', id);
-                        return id;
                     }}
+                    
+                    var deviceId = getOrCreateDeviceId();
+                    var current_date = '{datetime.now().strftime("%Y-%m-%d")}';
+                    
+                    // salva username + login date (con scadenza logica di 30 giorni)
+                    const expiryDate = new Date();
+                    expiryDate.setTime(expiryDate.getTime() + (30 * 24 * 60 * 60 * 1000));
+                    
+                    const userData = {{
+                        value: '{username}',
+                        expiry: expiryDate.getTime()
+                    }};
+                    const dateData = {{
+                        value: current_date,
+                        expiry: expiryDate.getTime()
+                    }};
+                    
+                    localStorage.setItem('workout_user', JSON.stringify(userData));
+                    localStorage.setItem('workout_login_date', JSON.stringify(dateData));
+                    
+                    // Comunica a Streamlit deviceId e dati
+                    window.parent.postMessage({{
+                        type: 'streamlit:setComponentValue',
+                        data: {{
+                            username: '{username}',
+                            loginDate: current_date,
+                            deviceId: deviceId,
+                            found: true
+                        }}
+                    }}, '*');
+                }} catch(e) {{
+                    console.error('set_user_cookie error', e);
+                    window.parent.postMessage({{
+                        type: 'streamlit:setComponentValue',
+                        data: {{ found: false }}
+                    }}, '*');
                 }}
-
-                var deviceId = getOrCreateDeviceId();
-                var current_date = '{datetime.now().strftime("%Y-%m-%d")}';
-                // salva username + login date (con scadenza logica di 30 giorni)
-                const expiryDate = new Date();
-                expiryDate.setTime(expiryDate.getTime() + (30 * 24 * 60 * 60 * 1000));
-                
-                const userData = {{
-                    value: '{username}',
-                    expiry: expiryDate.getTime()
-                }};
-                const dateData = {{
-                    value: current_date,
-                    expiry: expiryDate.getTime()
-                }};
-                localStorage.setItem('workout_user', JSON.stringify(userData));
-                localStorage.setItem('workout_login_date', JSON.stringify(dateData));
-
-                // Comunica a Streamlit deviceId e dati
-                window.parent.postMessage({{
-                    type: 'streamlit:setComponentValue',
-                    data: {{
-                        username: '{username}',
-                        loginDate: current_date,
-                        deviceId: deviceId,
-                        found: true
-                    }}
-                }}, '*');
-            } catch(e) {{
-                console.error('set_user_cookie error', e);
-                window.parent.postMessage({{ type: 'streamlit:setComponentValue', data: {{ found: false }} }}, '*');
-            }}
-        })();
-    </script>
-    </body>
-    </html>
+            }})();
+        </script>
+        </body>
+        </html>
     """, height=0)
+    
     # components.html restituisce il valore passato con setComponentValue
     try:
         return result.get('deviceId') if isinstance(result, dict) else None
     except:
         return None
-
 
 def delete_user_cookie():
     """Elimina i cookie/localStorage dell'utente e mantiene/opzionalmente cancella deviceId se necessario."""
