@@ -19,92 +19,93 @@ GIORNI = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato",
 # ============================================================================
 
 def generate_or_get_device_id():
-    """Genera o recupera un deviceId persistente dal localStorage del browser"""
+    """Genera o recupera un deviceId persistente basato su fingerprint del browser"""
     
     # Se già abbiamo il device_id in questa sessione, usalo
-    if 'device_id' in st.session_state and st.session_state.device_id and not st.session_state.device_id.startswith('loading-'):
+    if 'device_id' in st.session_state and st.session_state.device_id:
         return st.session_state.device_id
     
-    # Inizializza il contatore se non esiste
-    if 'device_load_attempt' not in st.session_state:
-        st.session_state.device_load_attempt = 0
-    
+    # Genera fingerprint basato su User Agent + Screen Resolution + Timezone + Language
     try:
         result = components.html("""
         <!DOCTYPE html>
         <html>
-        <head>
-            <meta charset="UTF-8">
-        </head>
         <body>
-            <script>
-                (function(){
-                    function getOrCreateDeviceId() {
-                        try {
-                            var id = localStorage.getItem('workout_device_id');
-                            
-                            if (!id) {
-                                if (typeof crypto !== 'undefined' && crypto.randomUUID) {
-                                    id = crypto.randomUUID();
-                                } else {
-                                    id = 'dev-' + Date.now().toString(36) + '-' + Math.random().toString(36).substr(2, 9);
-                                }
-                                
-                                try {
-                                    localStorage.setItem('workout_device_id', id);
-                                } catch(e) {
-                                    console.error('[Device ID] Errore salvataggio:', e);
-                                }
-                            }
-                            
-                            return id;
-                        } catch(e) {
-                            console.error('[Device ID] Errore:', e);
-                            return 'error-' + Date.now().toString(36);
-                        }
+        <script>
+            (function(){
+                try {
+                    // Raccolta dati per fingerprint
+                    const canvas = document.createElement('canvas');
+                    const ctx = canvas.getContext('2d');
+                    ctx.textBaseline = 'top';
+                    ctx.font = '14px Arial';
+                    ctx.fillText('fingerprint', 2, 2);
+                    const canvasFingerprint = canvas.toDataURL();
+                    
+                    const fingerprint = {
+                        userAgent: navigator.userAgent,
+                        language: navigator.language,
+                        platform: navigator.platform,
+                        screen: screen.width + 'x' + screen.height + 'x' + screen.colorDepth,
+                        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                        canvas: canvasFingerprint.slice(-50), // ultimi 50 char
+                        memory: navigator.deviceMemory || 'unknown',
+                        cores: navigator.hardwareConcurrency || 'unknown'
+                    };
+                    
+                    // Crea hash del fingerprint
+                    const fingerprintString = JSON.stringify(fingerprint);
+                    let hash = 0;
+                    for (let i = 0; i < fingerprintString.length; i++) {
+                        const char = fingerprintString.charCodeAt(i);
+                        hash = ((hash << 5) - hash) + char;
+                        hash = hash & hash;
                     }
                     
-                    // Esegui immediatamente
-                    var deviceId = getOrCreateDeviceId();
+                    const deviceId = 'fp-' + Math.abs(hash).toString(36);
                     
-                    // Invia subito il risultato
+                    // Prova anche a salvare in localStorage come backup
+                    try {
+                        localStorage.setItem('workout_device_id', deviceId);
+                    } catch(e) {
+                        console.log('localStorage non disponibile, usando solo fingerprint');
+                    }
+                    
+                    // Invia risultato
                     window.parent.postMessage({
                         type: 'streamlit:setComponentValue',
                         data: deviceId
                     }, '*');
-                })();
-            </script>
+                    
+                } catch (e) {
+                    console.error('Errore fingerprint:', e);
+                    // Fallback: genera ID random ma consistente per la sessione
+                    const fallbackId = 'session-' + Date.now().toString(36);
+                    window.parent.postMessage({
+                        type: 'streamlit:setComponentValue',
+                        data: fallbackId
+                    }, '*');
+                }
+            })();
+        </script>
         </body>
         </html>
         """, height=0)
         
-        # Se abbiamo un risultato valido (stringa)
-        if result and isinstance(result, str) and len(result) > 10:
+        if result and isinstance(result, str) and len(result) > 5:
             st.session_state.device_id = result
-            st.session_state.device_id_loaded = True
-            st.session_state.device_load_attempt = 0
             return result
-        
+            
     except Exception as e:
         pass
     
-    # Se non abbiamo ancora il device_id dopo alcuni tentativi, usa fallback
-    st.session_state.device_load_attempt += 1
-    
-    if st.session_state.device_load_attempt >= 3:
-        # Dopo 3 tentativi, genera un device ID permanente basato su session
+    # Fallback finale: genera ID basato su hash di session
+    if 'permanent_device_id' not in st.session_state:
         import uuid
-        if 'permanent_device_id' not in st.session_state:
-            st.session_state.permanent_device_id = f"session-{str(uuid.uuid4())}"
-        
-        st.session_state.device_id = st.session_state.permanent_device_id
-        st.session_state.device_id_loaded = True
-        return st.session_state.permanent_device_id
-    else:
-        # Riprova
-        import time
-        time.sleep(2)
-        st.rerun()
+        st.session_state.permanent_device_id = f"session-{str(uuid.uuid4())[:8]}"
+    
+    st.session_state.device_id = st.session_state.permanent_device_id
+    return st.session_state.permanent_device_id
     
 
 def check_login_expiry(login_date_str):
@@ -295,55 +296,47 @@ def show_login_page():
     # STEP 1: Ottieni il device_id
     device_id = generate_or_get_device_id()
     
-    # RIMOSSO: Non serve più il controllo per "loading-"
-    
-    # STEP 2: Controlla auto-login SOLO se non è già stato fatto
-    if not st.session_state.get('login_check_done', False):
+    # STEP 2: Controlla auto-login SOLO se non è già stato fatto e device_id è valido
+    if not st.session_state.get('login_check_done', False) and device_id and not device_id.startswith('session-'):
         with st.spinner("🔄 Controllo sessione..."):
-            # Verifica che il device_id sia valido (non fallback/error)
-            if device_id and not device_id.startswith('fallback-') and not device_id.startswith('error-'):
-                mapping = load_device_mapping_from_sheets(device_id)
-                
-                if mapping and mapping.get('auto_login') and mapping.get('username'):
-                    mapped_user = mapping.get('username')
-                    mapped_login_date = mapping.get('last_login')
-                    
-                    if not check_login_expiry(mapped_login_date):
-                        if verify_user_exists(mapped_user):
-                            st.session_state.logged_in = True
-                            st.session_state.current_user = mapped_user
-                            st.session_state.user_full_name = get_user_full_name(mapped_user)
-                            st.session_state.login_check_done = True
-                            st.success(f"✅ Accesso automatico: bentornato, {mapped_user}!")
-                            save_device_mapping_to_sheets(device_id, mapped_user)
-                            st.rerun()
-                        else:
-                            disable_auto_login_for_device(device_id)
+            mapping = load_device_mapping_from_sheets(device_id)
             
-            st.session_state.login_check_done = True
+            if mapping and mapping.get('auto_login') and mapping.get('username'):
+                mapped_user = mapping.get('username')
+                mapped_login_date = mapping.get('last_login')
+                
+                if not check_login_expiry(mapped_login_date):
+                    if verify_user_exists(mapped_user):
+                        st.session_state.logged_in = True
+                        st.session_state.current_user = mapped_user
+                        st.session_state.user_full_name = get_user_full_name(mapped_user)
+                        st.session_state.login_check_done = True
+                        save_device_mapping_to_sheets(device_id, mapped_user)
+                        st.rerun()
+                    else:
+                        disable_auto_login_for_device(device_id)
+        
+        st.session_state.login_check_done = True
     
     # STEP 3: Mostra form di login
     st.title("🔐 Login - Workout Tracker")
     
-    # Mostra avviso se device_id è fallback o session-based
-    if device_id.startswith('session-') or device_id.startswith('error-'):
-        st.warning("⚠️ **Modalità Sessione**: Il login automatico funzionerà solo per questa sessione del browser.")
-        with st.expander("ℹ️ Come abilitare il login persistente"):
+    # Mostra tipo di identificazione dispositivo
+    if device_id.startswith('fp-'):
+        st.success(f"✅ **Dispositivo Identificato** tramite fingerprint: `{device_id[:12]}...`")
+        st.caption("Il tuo dispositivo viene riconosciuto automaticamente senza cookies")
+    elif device_id.startswith('session-'):
+        st.warning("⚠️ **Modalità Sessione**: Login limitato a questa sessione del browser")
+        with st.expander("ℹ️ Perché vedo questo messaggio?"):
             st.markdown("""
-            **Il tuo browser potrebbe bloccare il localStorage. Per risolvere:**
-            1. Esci dalla modalità navigazione privata/incognito
-            2. Assicurati che i cookie siano abilitati
-            3. Su Safari: Impostazioni → Safari → "Blocca tutti i cookie" → disattiva
-            4. Su Chrome: Impostazioni → Privacy → Cookie → consenti i cookie
-            5. Prova a ricaricare la pagina (F5)
+            Il browser non supporta il riconoscimento automatico del dispositivo.
+            Questo può accadere in:
+            - Modalità navigazione privata/incognito
+            - Browser con restrizioni severe
+            - Alcune app mobile
             
-            **Device ID attuale:** `{}`
-            """.format(device_id[:30] + "..."))
-    elif device_id.startswith('fallback-'):
-        st.info("ℹ️ **Modalità Compatibilità**: Login automatico limitato a questa sessione.")
-    else:
-        st.success("✅ **Login Persistente Attivo**: Il tuo dispositivo verrà ricordato per 30 giorni.")
-        
+            **Soluzione:** Usa un browser standard (Chrome, Firefox, Safari) in modalità normale.
+            """)
     
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
@@ -353,38 +346,11 @@ def show_login_page():
         password = st.text_input("Password", type="password", key="login_password")
         
         # Mostra checkbox solo se device_id è valido
-        if not device_id.startswith('fallback-') and not device_id.startswith('error-'):
-            remember_me = st.checkbox("🔒 Ricordami per 30 giorni su questo dispositivo", value=True)
-        else:
-            remember_me = False
-            st.info("💡 Login automatico non disponibile in questa modalità")
-        
-        col_btn1, col_btn2 = st.columns(2)
-        with col_btn1:
-            if st.button("🔓 Accedi", use_container_width=True):
-                if not username or not password:
-                    st.error("⚠️ Inserisci username e password")
-                elif verify_user(username, password):
-                    st.session_state.logged_in = True
-                    st.session_state.current_user = username
-                    st.session_state.user_full_name = get_user_full_name(username)
-                    
-                    # Salva device mapping solo se device_id è valido e remember_me è attivo
-                    if remember_me and device_id and not device_id.startswith('fallback-') and not device_id.startswith('error-'):
-                        if save_device_mapping_to_sheets(device_id, username):
-                            st.success("✅ Dispositivo registrato!")
-                    
-                    st.rerun()
-                else:
-                    st.error("❌ Username o password errati")
-        
-        with col_btn2:
-            if st.button("📝 Registrati", use_container_width=True):
-                st.session_state.show_register = True
-                st.rerun()
-                
-        st.markdown("---")
-        st.caption("💡 **Suggerimento:** Abilita 'Ricordami' per accedere automaticamente da questo dispositivo per 30 giorni")
+        remember_me = st.checkbox(
+            "🔒 Ricordami per 30 giorni su questo dispositivo", 
+            value=device_id.startswith('fp-'),
+            disabled=device_id.startswith('session-')
+        )
 
 def show_register_page():
     """Mostra la pagina di registrazione"""
