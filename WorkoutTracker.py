@@ -25,8 +25,13 @@ def generate_or_get_device_id():
     if 'device_id' in st.session_state and st.session_state.device_id:
         return st.session_state.device_id
     
-    # Altrimenti, carica il componente HTML con una key univoca per forzare il rendering
-    component_key = f"device_id_loader_{st.session_state.get('device_load_attempt', 0)}"
+    # Se stiamo ancora caricando, usa un placeholder
+    if st.session_state.get('device_loading', False):
+        import uuid
+        return f"loading-{str(uuid.uuid4())}"
+    
+    # Marca come in caricamento
+    st.session_state.device_loading = True
     
     try:
         result = components.html("""
@@ -45,7 +50,6 @@ def generate_or_get_device_id():
                     
                     function getOrCreateDeviceId() {
                         try {
-                            // Prova a usare crypto.randomUUID (browser moderni)
                             var id = localStorage.getItem('workout_device_id');
                             console.log('[Device ID] Valore da localStorage:', id);
                             
@@ -54,7 +58,6 @@ def generate_or_get_device_id():
                                     id = crypto.randomUUID();
                                     console.log('[Device ID] Generato con crypto.randomUUID:', id);
                                 } else {
-                                    // Fallback per browser più vecchi
                                     id = 'dev-' + Date.now().toString(36) + '-' + Math.random().toString(36).substr(2, 9);
                                     console.log('[Device ID] Generato con fallback:', id);
                                 }
@@ -64,19 +67,16 @@ def generate_or_get_device_id():
                                     console.log('[Device ID] Salvato in localStorage');
                                 } catch(e) {
                                     console.error('[Device ID] Errore salvataggio localStorage:', e);
-                                    // Anche se non può salvare, usiamo l'ID generato per questa sessione
                                 }
                             }
                             
                             return id;
                         } catch(e) {
                             console.error('[Device ID] Errore generale:', e);
-                            // Ultimo fallback
                             return 'error-' + Date.now().toString(36);
                         }
                     }
                     
-                    // Aspetta un attimo per essere sicuri che il DOM sia pronto
                     setTimeout(function() {
                         try {
                             var deviceId = getOrCreateDeviceId();
@@ -84,7 +84,6 @@ def generate_or_get_device_id():
                             
                             document.getElementById('status').innerText = 'Device ID: ' + deviceId.substring(0, 8) + '...';
                             
-                            // Invia il risultato a Streamlit
                             window.parent.postMessage({
                                 type: 'streamlit:setComponentValue',
                                 data: { 
@@ -99,7 +98,6 @@ def generate_or_get_device_id():
                             console.error('[Device ID] Errore invio messaggio:', e);
                             document.getElementById('status').innerText = 'Errore: ' + e.message;
                             
-                            // Invia comunque un messaggio di errore
                             window.parent.postMessage({
                                 type: 'streamlit:setComponentValue',
                                 data: { 
@@ -115,7 +113,7 @@ def generate_or_get_device_id():
             </script>
         </body>
         </html>
-        """, height=30, key=component_key)
+        """, height=30)
     except Exception as e:
         st.error(f"Errore componente HTML: {e}")
         result = None
@@ -130,21 +128,20 @@ def generate_or_get_device_id():
         success = result.get('success', False)
         
         if device_id and success:
-            # Device ID caricato con successo
             st.session_state.device_id = device_id
             st.session_state.device_id_loaded = True
+            st.session_state.device_loading = False
             return device_id
         elif device_id:
-            # Device ID ricevuto ma con possibili errori
             st.session_state.device_id = device_id
             st.session_state.device_id_loaded = True
+            st.session_state.device_loading = False
             return device_id
     
     # Se arriviamo qui, il componente non ha ancora restituito il valore
-    # Usa un fallback TEMPORANEO e prova a ricaricare
     if st.session_state.device_load_attempt < 5:
         st.session_state.device_load_attempt += 1
-        # Non salvare il fallback, forza un rerun per riprovare
+        st.session_state.device_loading = False
         import uuid
         temp_id = f"loading-{str(uuid.uuid4())}"
         return temp_id
@@ -154,6 +151,7 @@ def generate_or_get_device_id():
         fallback_id = f"fallback-{str(uuid.uuid4())}"
         st.session_state.device_id = fallback_id
         st.session_state.device_id_loaded = True
+        st.session_state.device_loading = False
         return fallback_id
     
 
