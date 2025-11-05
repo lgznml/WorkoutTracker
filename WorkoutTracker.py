@@ -28,93 +28,97 @@ def generate_or_get_device_id():
     # Altrimenti, carica il componente HTML con una key univoca per forzare il rendering
     component_key = f"device_id_loader_{st.session_state.get('device_load_attempt', 0)}"
     
-    result = components.html("""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset="UTF-8">
-    </head>
-    <body>
-        <div id="status" style="font-family: monospace; font-size: 10px; color: #666;">
-            Caricamento device ID...
-        </div>
-        <script>
-            (function(){
-                console.log('[Device ID] Script avviato');
-                
-                function getOrCreateDeviceId() {
-                    try {
-                        // Prova a usare crypto.randomUUID (browser moderni)
-                        var id = localStorage.getItem('workout_device_id');
-                        console.log('[Device ID] Valore da localStorage:', id);
-                        
-                        if (!id) {
-                            if (typeof crypto !== 'undefined' && crypto.randomUUID) {
-                                id = crypto.randomUUID();
-                                console.log('[Device ID] Generato con crypto.randomUUID:', id);
-                            } else {
-                                // Fallback per browser più vecchi
-                                id = 'dev-' + Date.now().toString(36) + '-' + Math.random().toString(36).substr(2, 9);
-                                console.log('[Device ID] Generato con fallback:', id);
+    try:
+        result = components.html("""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+        </head>
+        <body>
+            <div id="status" style="font-family: monospace; font-size: 10px; color: #666;">
+                Caricamento device ID...
+            </div>
+            <script>
+                (function(){
+                    console.log('[Device ID] Script avviato');
+                    
+                    function getOrCreateDeviceId() {
+                        try {
+                            // Prova a usare crypto.randomUUID (browser moderni)
+                            var id = localStorage.getItem('workout_device_id');
+                            console.log('[Device ID] Valore da localStorage:', id);
+                            
+                            if (!id) {
+                                if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+                                    id = crypto.randomUUID();
+                                    console.log('[Device ID] Generato con crypto.randomUUID:', id);
+                                } else {
+                                    // Fallback per browser più vecchi
+                                    id = 'dev-' + Date.now().toString(36) + '-' + Math.random().toString(36).substr(2, 9);
+                                    console.log('[Device ID] Generato con fallback:', id);
+                                }
+                                
+                                try {
+                                    localStorage.setItem('workout_device_id', id);
+                                    console.log('[Device ID] Salvato in localStorage');
+                                } catch(e) {
+                                    console.error('[Device ID] Errore salvataggio localStorage:', e);
+                                    // Anche se non può salvare, usiamo l'ID generato per questa sessione
+                                }
                             }
                             
-                            try {
-                                localStorage.setItem('workout_device_id', id);
-                                console.log('[Device ID] Salvato in localStorage');
-                            } catch(e) {
-                                console.error('[Device ID] Errore salvataggio localStorage:', e);
-                                // Anche se non può salvare, usiamo l'ID generato per questa sessione
-                            }
+                            return id;
+                        } catch(e) {
+                            console.error('[Device ID] Errore generale:', e);
+                            // Ultimo fallback
+                            return 'error-' + Date.now().toString(36);
                         }
-                        
-                        return id;
-                    } catch(e) {
-                        console.error('[Device ID] Errore generale:', e);
-                        // Ultimo fallback
-                        return 'error-' + Date.now().toString(36);
                     }
-                }
-                
-                // Aspetta un attimo per essere sicuri che il DOM sia pronto
-                setTimeout(function() {
-                    try {
-                        var deviceId = getOrCreateDeviceId();
-                        console.log('[Device ID] Device ID finale:', deviceId);
-                        
-                        document.getElementById('status').innerText = 'Device ID: ' + deviceId.substring(0, 8) + '...';
-                        
-                        // Invia il risultato a Streamlit
-                        window.parent.postMessage({
-                            type: 'streamlit:setComponentValue',
-                            data: { 
-                                deviceId: deviceId,
-                                timestamp: Date.now(),
-                                success: true
-                            }
-                        }, '*');
-                        
-                        console.log('[Device ID] Messaggio inviato a Streamlit');
-                    } catch(e) {
-                        console.error('[Device ID] Errore invio messaggio:', e);
-                        document.getElementById('status').innerText = 'Errore: ' + e.message;
-                        
-                        // Invia comunque un messaggio di errore
-                        window.parent.postMessage({
-                            type: 'streamlit:setComponentValue',
-                            data: { 
-                                deviceId: 'error-' + Date.now(),
-                                timestamp: Date.now(),
-                                success: false,
-                                error: e.message
-                            }
-                        }, '*');
-                    }
-                }, 250);
-            })();
-        </script>
-    </body>
-    </html>
-    """, height=30, key=component_key)
+                    
+                    // Aspetta un attimo per essere sicuri che il DOM sia pronto
+                    setTimeout(function() {
+                        try {
+                            var deviceId = getOrCreateDeviceId();
+                            console.log('[Device ID] Device ID finale:', deviceId);
+                            
+                            document.getElementById('status').innerText = 'Device ID: ' + deviceId.substring(0, 8) + '...';
+                            
+                            // Invia il risultato a Streamlit
+                            window.parent.postMessage({
+                                type: 'streamlit:setComponentValue',
+                                data: { 
+                                    deviceId: deviceId,
+                                    timestamp: Date.now(),
+                                    success: true
+                                }
+                            }, '*');
+                            
+                            console.log('[Device ID] Messaggio inviato a Streamlit');
+                        } catch(e) {
+                            console.error('[Device ID] Errore invio messaggio:', e);
+                            document.getElementById('status').innerText = 'Errore: ' + e.message;
+                            
+                            // Invia comunque un messaggio di errore
+                            window.parent.postMessage({
+                                type: 'streamlit:setComponentValue',
+                                data: { 
+                                    deviceId: 'error-' + Date.now(),
+                                    timestamp: Date.now(),
+                                    success: false,
+                                    error: e.message
+                                }
+                            }, '*');
+                        }
+                    }, 250);
+                })();
+            </script>
+        </body>
+        </html>
+        """, height=30, key=component_key)
+    except Exception as e:
+        st.error(f"Errore componente HTML: {e}")
+        result = None
     
     # Incrementa il contatore dei tentativi
     if 'device_load_attempt' not in st.session_state:
@@ -259,44 +263,47 @@ def disable_auto_login_for_device(device_id):
 
 def test_device_persistence():
     """Testa se il localStorage funziona correttamente"""
-    result = components.html("""
-    <!DOCTYPE html>
-    <html>
-    <body>
-    <script>
-        (function(){
-            try {
-                // Test localStorage
-                var testKey = 'workout_test_' + Date.now();
-                localStorage.setItem(testKey, 'test');
-                var retrieved = localStorage.getItem(testKey);
-                localStorage.removeItem(testKey);
-                
-                var works = (retrieved === 'test');
-                
-                window.parent.postMessage({
-                    type: 'streamlit:setComponentValue',
-                    data: { 
-                        localStorageWorks: works,
-                        error: null
-                    }
-                }, '*');
-            } catch (e) {
-                window.parent.postMessage({
-                    type: 'streamlit:setComponentValue',
-                    data: { 
-                        localStorageWorks: false,
-                        error: e.message
-                    }
-                }, '*');
-            }
-        })();
-    </script>
-    </body>
-    </html>
-    """, height=0)
-    
-    return result
+    try:
+        result = components.html("""
+        <!DOCTYPE html>
+        <html>
+        <body>
+        <script>
+            (function(){
+                try {
+                    // Test localStorage
+                    var testKey = 'workout_test_' + Date.now();
+                    localStorage.setItem(testKey, 'test');
+                    var retrieved = localStorage.getItem(testKey);
+                    localStorage.removeItem(testKey);
+                    
+                    var works = (retrieved === 'test');
+                    
+                    window.parent.postMessage({
+                        type: 'streamlit:setComponentValue',
+                        data: { 
+                            localStorageWorks: works,
+                            error: null
+                        }
+                    }, '*');
+                } catch (e) {
+                    window.parent.postMessage({
+                        type: 'streamlit:setComponentValue',
+                        data: { 
+                            localStorageWorks: false,
+                            error: e.message
+                        }
+                    }, '*');
+                }
+            })();
+        </script>
+        </body>
+        </html>
+        """, height=0)
+        
+        return result if result else {'localStorageWorks': False, 'error': 'Nessun risultato'}
+    except Exception as e:
+        return {'localStorageWorks': False, 'error': str(e)}
     
 def verify_user(username, password):
     """Verifica le credenziali utente"""
