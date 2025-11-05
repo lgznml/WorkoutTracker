@@ -22,16 +22,12 @@ def generate_or_get_device_id():
     """Genera o recupera un deviceId persistente dal localStorage del browser"""
     
     # Se già abbiamo il device_id in questa sessione, usalo
-    if 'device_id' in st.session_state and st.session_state.device_id:
+    if 'device_id' in st.session_state and st.session_state.device_id and not st.session_state.device_id.startswith('loading-'):
         return st.session_state.device_id
     
-    # Se stiamo ancora caricando, usa un placeholder
-    if st.session_state.get('device_loading', False):
-        import uuid
-        return f"loading-{str(uuid.uuid4())}"
-    
-    # Marca come in caricamento
-    st.session_state.device_loading = True
+    # Inizializza il contatore se non esiste
+    if 'device_load_attempt' not in st.session_state:
+        st.session_state.device_load_attempt = 0
     
     try:
         result = components.html("""
@@ -41,118 +37,74 @@ def generate_or_get_device_id():
             <meta charset="UTF-8">
         </head>
         <body>
-            <div id="status" style="font-family: monospace; font-size: 10px; color: #666;">
-                Caricamento device ID...
-            </div>
             <script>
                 (function(){
-                    console.log('[Device ID] Script avviato');
-                    
                     function getOrCreateDeviceId() {
                         try {
                             var id = localStorage.getItem('workout_device_id');
-                            console.log('[Device ID] Valore da localStorage:', id);
                             
                             if (!id) {
                                 if (typeof crypto !== 'undefined' && crypto.randomUUID) {
                                     id = crypto.randomUUID();
-                                    console.log('[Device ID] Generato con crypto.randomUUID:', id);
                                 } else {
                                     id = 'dev-' + Date.now().toString(36) + '-' + Math.random().toString(36).substr(2, 9);
-                                    console.log('[Device ID] Generato con fallback:', id);
                                 }
                                 
                                 try {
                                     localStorage.setItem('workout_device_id', id);
-                                    console.log('[Device ID] Salvato in localStorage');
                                 } catch(e) {
-                                    console.error('[Device ID] Errore salvataggio localStorage:', e);
+                                    console.error('[Device ID] Errore salvataggio:', e);
                                 }
                             }
                             
                             return id;
                         } catch(e) {
-                            console.error('[Device ID] Errore generale:', e);
+                            console.error('[Device ID] Errore:', e);
                             return 'error-' + Date.now().toString(36);
                         }
                     }
                     
-                    setTimeout(function() {
-                        try {
-                            var deviceId = getOrCreateDeviceId();
-                            console.log('[Device ID] Device ID finale:', deviceId);
-                            
-                            document.getElementById('status').innerText = 'Device ID: ' + deviceId.substring(0, 8) + '...';
-                            
-                            window.parent.postMessage({
-                                type: 'streamlit:setComponentValue',
-                                data: { 
-                                    deviceId: deviceId,
-                                    timestamp: Date.now(),
-                                    success: true
-                                }
-                            }, '*');
-                            
-                            console.log('[Device ID] Messaggio inviato a Streamlit');
-                        } catch(e) {
-                            console.error('[Device ID] Errore invio messaggio:', e);
-                            document.getElementById('status').innerText = 'Errore: ' + e.message;
-                            
-                            window.parent.postMessage({
-                                type: 'streamlit:setComponentValue',
-                                data: { 
-                                    deviceId: 'error-' + Date.now(),
-                                    timestamp: Date.now(),
-                                    success: false,
-                                    error: e.message
-                                }
-                            }, '*');
-                        }
-                    }, 250);
+                    // Esegui immediatamente
+                    var deviceId = getOrCreateDeviceId();
+                    
+                    // Invia subito il risultato
+                    window.parent.postMessage({
+                        type: 'streamlit:setComponentValue',
+                        data: deviceId
+                    }, '*');
                 })();
             </script>
         </body>
         </html>
-        """, height=30)
-    except Exception as e:
-        st.error(f"Errore componente HTML: {e}")
-        result = None
-    
-    # Incrementa il contatore dei tentativi
-    if 'device_load_attempt' not in st.session_state:
-        st.session_state.device_load_attempt = 0
-    
-    # Analizza il risultato
-    if result and isinstance(result, dict):
-        device_id = result.get('deviceId')
-        success = result.get('success', False)
+        """, height=0)
         
-        if device_id and success:
-            st.session_state.device_id = device_id
+        # Se abbiamo un risultato valido (stringa)
+        if result and isinstance(result, str) and len(result) > 10:
+            st.session_state.device_id = result
             st.session_state.device_id_loaded = True
-            st.session_state.device_loading = False
-            return device_id
-        elif device_id:
-            st.session_state.device_id = device_id
-            st.session_state.device_id_loaded = True
-            st.session_state.device_loading = False
-            return device_id
+            st.session_state.device_load_attempt = 0
+            return result
+        
+    except Exception as e:
+        pass
     
-    # Se arriviamo qui, il componente non ha ancora restituito il valore
-    if st.session_state.device_load_attempt < 5:
-        st.session_state.device_load_attempt += 1
-        st.session_state.device_loading = False
+    # Se non abbiamo ancora il device_id dopo alcuni tentativi, usa fallback
+    st.session_state.device_load_attempt += 1
+    
+    if st.session_state.device_load_attempt >= 3:
+        # Dopo 3 tentativi, genera un device ID permanente basato su session
         import uuid
-        temp_id = f"loading-{str(uuid.uuid4())}"
-        return temp_id
-    else:
-        # Dopo 5 tentativi, usa un fallback permanente
-        import uuid
-        fallback_id = f"fallback-{str(uuid.uuid4())}"
-        st.session_state.device_id = fallback_id
+        if 'permanent_device_id' not in st.session_state:
+            st.session_state.permanent_device_id = f"session-{str(uuid.uuid4())}"
+        
+        st.session_state.device_id = st.session_state.permanent_device_id
         st.session_state.device_id_loaded = True
-        st.session_state.device_loading = False
-        return fallback_id
+        return st.session_state.permanent_device_id
+    else:
+        # Riprova
+        import time
+        time.sleep(2)
+        st.rerun()
     
 
 def check_login_expiry(login_date_str):
@@ -343,13 +295,7 @@ def show_login_page():
     # STEP 1: Ottieni il device_id
     device_id = generate_or_get_device_id()
     
-    # Se il device_id è ancora in fase di caricamento, mostra spinner e riprova
-    if device_id.startswith('loading-'):
-        with st.spinner("🔄 Inizializzazione dispositivo..."):
-            import time
-            time.sleep(0.5)  # Breve pausa
-            st.rerun()
-        return
+    # RIMOSSO: Non serve più il controllo per "loading-"
     
     # STEP 2: Controlla auto-login SOLO se non è già stato fatto
     if not st.session_state.get('login_check_done', False):
@@ -379,19 +325,25 @@ def show_login_page():
     # STEP 3: Mostra form di login
     st.title("🔐 Login - Workout Tracker")
     
-    # Mostra avviso se device_id è fallback
-    if device_id.startswith('fallback-') or device_id.startswith('error-'):
-        st.warning("⚠️ **Modalità Limitata**: Il tuo browser potrebbe essere in modalità privata o bloccare i cookie. Il login persistente potrebbe non funzionare correttamente.")
-        with st.expander("ℹ️ Come risolvere"):
+    # Mostra avviso se device_id è fallback o session-based
+    if device_id.startswith('session-') or device_id.startswith('error-'):
+        st.warning("⚠️ **Modalità Sessione**: Il login automatico funzionerà solo per questa sessione del browser.")
+        with st.expander("ℹ️ Come abilitare il login persistente"):
             st.markdown("""
-            **Per abilitare il login automatico:**
+            **Il tuo browser potrebbe bloccare il localStorage. Per risolvere:**
             1. Esci dalla modalità navigazione privata/incognito
-            2. Assicurati che i cookie siano abilitati nel browser
-            3. Su Safari mobile: Impostazioni → Safari → Blocca cookie → disabilita "Blocca tutti i cookie"
-            4. Su Chrome mobile: Impostazioni → Impostazioni sito → Cookie → abilita i cookie
+            2. Assicurati che i cookie siano abilitati
+            3. Su Safari: Impostazioni → Safari → "Blocca tutti i cookie" → disattiva
+            4. Su Chrome: Impostazioni → Privacy → Cookie → consenti i cookie
+            5. Prova a ricaricare la pagina (F5)
             
             **Device ID attuale:** `{}`
-            """.format(device_id[:20] + "..."))
+            """.format(device_id[:30] + "..."))
+    elif device_id.startswith('fallback-'):
+        st.info("ℹ️ **Modalità Compatibilità**: Login automatico limitato a questa sessione.")
+    else:
+        st.success("✅ **Login Persistente Attivo**: Il tuo dispositivo verrà ricordato per 30 giorni.")
+        
     
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
