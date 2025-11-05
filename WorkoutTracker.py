@@ -19,168 +19,105 @@ GIORNI = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato",
 # ============================================================================
 
 def set_user_cookie(username):
-    """Imposta/aggiorna IndexedDB (fallback localStorage) con username, login date e deviceId; ritorna il deviceId."""
+    """Imposta/aggiorna localStorage con username, login date e deviceId; ritorna il deviceId generato/letto."""
+    # Il componente JS restituisce un oggetto {username, loginDate, deviceId}
     result = components.html(f"""
-    <!DOCTYPE html>
-    <html>
-    <body>
-    <script>
-    (function(){
-        // Utility IndexedDB promise helpers
-        function idbOpen(dbName, storeName) {{
-            return new Promise((resolve, reject) => {{
-                const req = indexedDB.open(dbName, 1);
-                req.onupgradeneeded = e => {{
-                    const db = e.target.result;
-                    if (!db.objectStoreNames.contains(storeName)) {{
-                        db.createObjectStore(storeName);
-                    }}
-                }};
-                req.onsuccess = e => resolve(e.target.result);
-                req.onerror = e => reject(e);
-            }});
-        }}
-
-        function idbPut(db, storeName, key, value) {{
-            return new Promise((resolve, reject) => {{
+        <!DOCTYPE html>
+        <html>
+        <body>
+        <script>
+            (function(){{
                 try {{
-                    const tx = db.transaction(storeName, 'readwrite');
-                    const store = tx.objectStore(storeName);
-                    const req = store.put(value, key);
-                    req.onsuccess = () => resolve(true);
-                    req.onerror = (ev) => reject(ev);
-                }} catch (e) {{
-                    reject(e);
-                }}
-            }});
-        }}
-
-        function getOrCreateDeviceId() {{
-            try {{
-                var id = localStorage.getItem('workout_device_id');
-                if (!id) {{
-                    if (window.crypto && crypto.randomUUID) {{
-                        id = crypto.randomUUID();
-                    }} else {{
-                        id = 'dev-' + Math.random().toString(36).slice(2) + '-' + Date.now().toString(36);
+                    // Genera o recupera deviceId
+                    function getOrCreateDeviceId() {{
+                        try {{
+                            if (crypto && crypto.randomUUID) {{
+                                // browser moderni
+                                var id = localStorage.getItem('workout_device_id');
+                                if (!id) {{
+                                    id = crypto.randomUUID();
+                                    localStorage.setItem('workout_device_id', id);
+                                }}
+                                return id;
+                            }} else {{
+                                var id = localStorage.getItem('workout_device_id');
+                                if (!id) {{
+                                    id = 'dev-' + Math.random().toString(36).slice(2) + '-' + Date.now().toString(36);
+                                    localStorage.setItem('workout_device_id', id);
+                                }}
+                                return id;
+                            }}
+                        }} catch(e) {{
+                            var id = localStorage.getItem('workout_device_id') || ('dev-' + Math.random().toString(36).slice(2));
+                            localStorage.setItem('workout_device_id', id);
+                            return id;
+                        }}
                     }}
-                    localStorage.setItem('workout_device_id', id);
-                }}
-                return id;
-            }} catch(e) {{
-                return null;
-            }}
-        }}
-
-        (async function main(){{
-            try {{
-                const deviceId = getOrCreateDeviceId();
-                const current_date = '{datetime.now().strftime("%Y-%m-%d")}';
-                const expiryTs = (new Date()).getTime() + (30 * 24 * 60 * 60 * 1000);
-
-                const userData = {{ value: '{username}', expiry: expiryTs }};
-                const dateData = {{ value: current_date, expiry: expiryTs }};
-
-                // Proviamo IndexedDB prima
-                try {{
-                    const db = await idbOpen('workout_db', 'kv');
-                    await idbPut(db, 'kv', 'workout_user', userData);
-                    await idbPut(db, 'kv', 'workout_login_date', dateData);
-                    if (deviceId) {{
-                        await idbPut(db, 'kv', 'workout_device_id', deviceId);
-                    }}
+                    
+                    var deviceId = getOrCreateDeviceId();
+                    var current_date = '{datetime.now().strftime("%Y-%m-%d")}';
+                    
+                    // salva username + login date (con scadenza logica di 30 giorni)
+                    const expiryDate = new Date();
+                    expiryDate.setTime(expiryDate.getTime() + (30 * 24 * 60 * 60 * 1000));
+                    
+                    const userData = {{
+                        value: '{username}',
+                        expiry: expiryDate.getTime()
+                    }};
+                    const dateData = {{
+                        value: current_date,
+                        expiry: expiryDate.getTime()
+                    }};
+                    
+                    localStorage.setItem('workout_user', JSON.stringify(userData));
+                    localStorage.setItem('workout_login_date', JSON.stringify(dateData));
+                    
+                    // Comunica a Streamlit deviceId e dati
+                    window.parent.postMessage({{
+                        type: 'streamlit:setComponentValue',
+                        data: {{
+                            username: '{username}',
+                            loginDate: current_date,
+                            deviceId: deviceId,
+                            found: true
+                        }}
+                    }}, '*');
                 }} catch(e) {{
-                    // fallback su localStorage
-                    try {{
-                        localStorage.setItem('workout_user', JSON.stringify(userData));
-                        localStorage.setItem('workout_login_date', JSON.stringify(dateData));
-                        if (deviceId) localStorage.setItem('workout_device_id', deviceId);
-                    }} catch(err) {{
-                        console.warn('IndexedDB/localStorage write failed', err);
-                    }}
+                    console.error('set_user_cookie error', e);
+                    window.parent.postMessage({{
+                        type: 'streamlit:setComponentValue',
+                        data: {{ found: false }}
+                    }}, '*');
                 }}
-
-                // Comunica il risultato a Streamlit (ritorna deviceId)
-                window.parent.postMessage({{
-                    type: 'streamlit:setComponentValue',
-                    data: {{
-                        username: '{username}',
-                        loginDate: current_date,
-                        deviceId: deviceId,
-                        found: true
-                    }}
-                }}, '*');
-            }} catch(e) {{
-                console.error('set_user_cookie error', e);
-                window.parent.postMessage({{ type: 'streamlit:setComponentValue', data: {{ found: false }} }}, '*');
-            }}
-        }})();
-    })();
-    </script>
-    </body>
-    </html>
+            }})();
+        </script>
+        </body>
+        </html>
     """, height=0)
-
+    
+    # components.html restituisce il valore passato con setComponentValue
     try:
         return result.get('deviceId') if isinstance(result, dict) else None
     except:
         return None
 
-
 def delete_user_cookie():
-    """Elimina le voci di login dall'IndexedDB e da localStorage (non rimuove deviceId a meno che non si voglia)."""
+    """Elimina i cookie/localStorage dell'utente e mantiene/opzionalmente cancella deviceId se necessario."""
     components.html("""
     <script>
-    (function(){
-        function idbOpenSimple(dbName, storeName, cb, errcb) {
-            try {
-                const req = indexedDB.open(dbName, 1);
-                req.onupgradeneeded = e => {
-                    const db = e.target.result;
-                    if (!db.objectStoreNames.contains(storeName)) {
-                        db.createObjectStore(storeName);
-                    }
-                };
-                req.onsuccess = e => cb(e.target.result);
-                req.onerror = e => errcb && errcb(e);
-            } catch(e) {
-                errcb && errcb(e);
-            }
-        }
-
-        // Proviamo a cancellare da IndexedDB
-        idbOpenSimple('workout_db', 'kv', function(db) {
-            try {
-                const tx = db.transaction('kv', 'readwrite');
-                const store = tx.objectStore('kv');
-                store.delete('workout_user');
-                store.delete('workout_login_date');
-                // NON eliminiamo workout_device_id per mantenere il riconoscimento dispositivo dopo logout.
-                tx.oncomplete = function() {
-                    console.log('IndexedDB: login keys deleted');
-                };
-            } catch(e) {
-                console.warn('IndexedDB deletion failed', e);
-            }
-        }, function(){ /* ignore */ });
-
-        // Puliamo anche localStorage (fallback)
         try {
             localStorage.removeItem('workout_user');
             localStorage.removeItem('workout_login_date');
-            // Se si desidera rimuovere anche il device id, decommentare la riga sotto
+            // Nota: non rimuoviamo automaticamente workout_device_id così il dispositivo continua a
+            // essere riconosciuto. Se vuoi rimuoverlo anche, decommenta la riga sotto.
             // localStorage.removeItem('workout_device_id');
-            console.log('localStorage: login keys removed');
+            console.log('Cookie eliminati (workout_user, workout_login_date).');
         } catch(e) {
-            console.warn('localStorage remove failed', e);
+            console.error('Errore eliminazione cookie', e);
         }
-
-        // Comunichiamo a Streamlit che l'operazione è terminata
-        window.parent.postMessage({ type: 'streamlit:setComponentValue', data: { deleted: true } }, '*');
-    })();
     </script>
     """, height=0)
-
 
 
 def get_saved_user():
@@ -189,103 +126,87 @@ def get_saved_user():
     return st.session_state.get('saved_username', None)
 
 def check_and_restore_session():
-    """Controlla IndexedDB (fallback localStorage) e ritorna un dict con i dati {found, username?, loginDate?, deviceId?}."""
+    """Controlla localStorage (deviceId e eventuale ultimo utente) e ritorna un dict con i dati."""
     result = components.html("""
     <!DOCTYPE html>
     <html>
     <body>
-    <script>
-    (function(){
-        function idbOpen(dbName, storeName) {
-            return new Promise((resolve, reject) => {
+        <div id="status" style="display:none;">Checking login...</div>
+        <script>
+            (function(){
                 try {
-                    const req = indexedDB.open(dbName, 1);
-                    req.onupgradeneeded = e => {
-                        const db = e.target.result;
-                        if (!db.objectStoreNames.contains(storeName)) {
-                            db.createObjectStore(storeName);
-                        }
-                    };
-                    req.onsuccess = e => resolve(e.target.result);
-                    req.onerror = e => reject(e);
-                } catch(e) {
-                    reject(e);
-                }
-            });
-        }
-
-        function idbGet(db, storeName, key) {
-            return new Promise((resolve, reject) => {
-                try {
-                    const tx = db.transaction(storeName, 'readonly');
-                    const store = tx.objectStore(storeName);
-                    const req = store.get(key);
-                    req.onsuccess = () => resolve(req.result);
-                    req.onerror = () => resolve(null);
-                } catch(e) {
-                    resolve(null);
-                }
-            });
-        }
-
-        function fallbackRead() {
-            try {
-                const usernameRaw = localStorage.getItem('workout_user');
-                const loginDateRaw = localStorage.getItem('workout_login_date');
-                const deviceId = localStorage.getItem('workout_device_id') || null;
-                if (usernameRaw && loginDateRaw) {
-                    try {
-                        const userData = JSON.parse(usernameRaw);
-                        const dateData = JSON.parse(loginDateRaw);
-                        return { found: true, username: userData.value, loginDate: dateData.value, deviceId: deviceId };
-                    } catch(e) {
-                        return { found: false, deviceId: deviceId };
-                    }
-                }
-                return { found: false, deviceId: deviceId };
-            } catch(e) {
-                return { found: false, deviceId: null };
-            }
-        }
-
-        (async function main(){
-            try {
-                // Tenta IndexedDB
-                try {
-                    const db = await idbOpen('workout_db', 'kv');
-                    const userData = await idbGet(db, 'kv', 'workout_user');
-                    const dateData = await idbGet(db, 'kv', 'workout_login_date');
-                    const deviceId = (await idbGet(db, 'kv', 'workout_device_id')) || localStorage.getItem('workout_device_id') || null;
-
-                    if (userData && dateData) {
-                        // controllo scadenza lato client (expiry saved in object)
-                        const now = Date.now();
-                        if (userData.expiry && dateData.expiry && now <= userData.expiry && now <= dateData.expiry) {
-                            window.parent.postMessage({ type: 'streamlit:setComponentValue', data: { found: true, username: userData.value, loginDate: dateData.value, deviceId: deviceId } }, '*');
-                            return;
+                    // Recupera o crea deviceId
+                    function getOrCreateDeviceId() {
+                        try {
+                            if (crypto && crypto.randomUUID) {
+                                var id = localStorage.getItem('workout_device_id');
+                                if (!id) {
+                                    id = crypto.randomUUID();
+                                    localStorage.setItem('workout_device_id', id);
+                                }
+                                return id;
+                            } else {
+                                var id = localStorage.getItem('workout_device_id');
+                                if (!id) {
+                                    id = 'dev-' + Math.random().toString(36).slice(2) + '-' + Date.now().toString(36);
+                                    localStorage.setItem('workout_device_id', id);
+                                }
+                                return id;
+                            }
+                        } catch(e) {
+                            var id = localStorage.getItem('workout_device_id') || ('dev-' + Math.random().toString(36).slice(2));
+                            localStorage.setItem('workout_device_id', id);
+                            return id;
                         }
                     }
-                } catch(e) {
-                    // IndexedDB non disponibile o errore: prosegui con fallback
-                    console.warn('IndexedDB read failed, using fallback', e);
-                }
 
-                // Fallback su localStorage
-                const fallback = fallbackRead();
-                window.parent.postMessage({ type: 'streamlit:setComponentValue', data: fallback }, '*');
-            } catch(e) {
-                console.error('check_and_restore_session error', e);
-                window.parent.postMessage({ type: 'streamlit:setComponentValue', data: { found: false, deviceId: null } }, '*');
-            }
-        })();
-    })();
-    </script>
+                    var deviceId = getOrCreateDeviceId();
+
+                    const usernameRaw = localStorage.getItem('workout_user');
+                    const loginDateRaw = localStorage.getItem('workout_login_date');
+                    var payload = { found: false, deviceId: deviceId };
+
+                    if (usernameRaw && loginDateRaw) {
+                        try {
+                            var userData = JSON.parse(usernameRaw);
+                            var dateData = JSON.parse(loginDateRaw);
+                            var now = new Date().getTime();
+
+                            // Verifica scadenza: controlliamo sia expiry che che la data login (30 giorni)
+                            if (userData && dateData && userData.expiry && dateData.expiry && now <= userData.expiry && now <= dateData.expiry) {
+                                var loginTime = new Date(dateData.value).getTime();
+                                var daysPassed = Math.floor((now - loginTime) / (1000 * 60 * 60 * 24));
+                                if (daysPassed <= 30) {
+                                    payload = {
+                                        found: true,
+                                        username: userData.value,
+                                        loginDate: dateData.value,
+                                        deviceId: deviceId
+                                    };
+                                    document.getElementById('status').innerText = 'Login found: ' + userData.value;
+                                }
+                            }
+                        } catch(e) {
+                            console.error('Parsing localStorage error', e);
+                        }
+                    }
+
+                    window.parent.postMessage({
+                        type: 'streamlit:setComponentValue',
+                        data: payload
+                    }, '*');
+                } catch (e) {
+                    console.error('Error checking login:', e);
+                    window.parent.postMessage({ type: 'streamlit:setComponentValue', data: { found: false, deviceId: null } }, '*');
+                }
+            })();
+        </script>
     </body>
     </html>
     """, height=0)
 
+    # result sarà un dict con almeno 'found' e 'deviceId'
     return result
-
 
     
 def check_login_expiry(login_date_str):
