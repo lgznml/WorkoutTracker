@@ -19,93 +19,154 @@ GIORNI = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato",
 # ============================================================================
 
 def generate_or_get_device_id():
-    """Genera o recupera un deviceId persistente basato su fingerprint del browser"""
+    """Genera o recupera un deviceId PERSISTENTE usando IndexedDB (più affidabile di localStorage)"""
     
     # Se già abbiamo il device_id in questa sessione, usalo
-    if 'device_id' in st.session_state and st.session_state.device_id:
+    if 'device_id' in st.session_state and st.session_state.device_id and not st.session_state.device_id.startswith('loading'):
         return st.session_state.device_id
     
-    # Genera fingerprint basato su User Agent + Screen Resolution + Timezone + Language
+    # Inizializza il contatore se non esiste
+    if 'device_load_attempt' not in st.session_state:
+        st.session_state.device_load_attempt = 0
+    
     try:
         result = components.html("""
         <!DOCTYPE html>
         <html>
+        <head>
+            <meta charset="UTF-8">
+        </head>
         <body>
-        <script>
-            (function(){
-                try {
-                    // Raccolta dati per fingerprint
-                    const canvas = document.createElement('canvas');
-                    const ctx = canvas.getContext('2d');
-                    ctx.textBaseline = 'top';
-                    ctx.font = '14px Arial';
-                    ctx.fillText('fingerprint', 2, 2);
-                    const canvasFingerprint = canvas.toDataURL();
-                    
-                    const fingerprint = {
-                        userAgent: navigator.userAgent,
-                        language: navigator.language,
-                        platform: navigator.platform,
-                        screen: screen.width + 'x' + screen.height + 'x' + screen.colorDepth,
-                        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-                        canvas: canvasFingerprint.slice(-50), // ultimi 50 char
-                        memory: navigator.deviceMemory || 'unknown',
-                        cores: navigator.hardwareConcurrency || 'unknown'
-                    };
-                    
-                    // Crea hash del fingerprint
-                    const fingerprintString = JSON.stringify(fingerprint);
-                    let hash = 0;
-                    for (let i = 0; i < fingerprintString.length; i++) {
-                        const char = fingerprintString.charCodeAt(i);
-                        hash = ((hash << 5) - hash) + char;
-                        hash = hash & hash;
+            <script>
+                (function(){
+                    // Usa IndexedDB invece di localStorage (più persistente)
+                    function openDatabase() {
+                        return new Promise((resolve, reject) => {
+                            const request = indexedDB.open('WorkoutTrackerDB', 1);
+                            
+                            request.onerror = () => reject(request.error);
+                            request.onsuccess = () => resolve(request.result);
+                            
+                            request.onupgradeneeded = (event) => {
+                                const db = event.target.result;
+                                if (!db.objectStoreNames.contains('deviceStore')) {
+                                    db.createObjectStore('deviceStore');
+                                }
+                            };
+                        });
                     }
                     
-                    const deviceId = 'fp-' + Math.abs(hash).toString(36);
-                    
-                    // Prova anche a salvare in localStorage come backup
-                    try {
-                        localStorage.setItem('workout_device_id', deviceId);
-                    } catch(e) {
-                        console.log('localStorage non disponibile, usando solo fingerprint');
+                    function getDeviceId(db) {
+                        return new Promise((resolve, reject) => {
+                            const transaction = db.transaction(['deviceStore'], 'readonly');
+                            const store = transaction.objectStore('deviceStore');
+                            const request = store.get('deviceId');
+                            
+                            request.onsuccess = () => resolve(request.result);
+                            request.onerror = () => reject(request.error);
+                        });
                     }
                     
-                    // Invia risultato
-                    window.parent.postMessage({
-                        type: 'streamlit:setComponentValue',
-                        data: deviceId
-                    }, '*');
+                    function setDeviceId(db, deviceId) {
+                        return new Promise((resolve, reject) => {
+                            const transaction = db.transaction(['deviceStore'], 'readwrite');
+                            const store = transaction.objectStore('deviceStore');
+                            const request = store.put(deviceId, 'deviceId');
+                            
+                            request.onsuccess = () => resolve(deviceId);
+                            request.onerror = () => reject(request.error);
+                        });
+                    }
                     
-                } catch (e) {
-                    console.error('Errore fingerprint:', e);
-                    // Fallback: genera ID random ma consistente per la sessione
-                    const fallbackId = 'session-' + Date.now().toString(36);
-                    window.parent.postMessage({
-                        type: 'streamlit:setComponentValue',
-                        data: fallbackId
-                    }, '*');
-                }
-            })();
-        </script>
+                    async function getOrCreateDeviceId() {
+                        try {
+                            const db = await openDatabase();
+                            let deviceId = await getDeviceId(db);
+                            
+                            if (!deviceId) {
+                                // Genera ID crittograficamente sicuro
+                                if (crypto && crypto.randomUUID) {
+                                    deviceId = 'dev-' + crypto.randomUUID();
+                                } else {
+                                    // Fallback per browser vecchi
+                                    const array = new Uint8Array(16);
+                                    crypto.getRandomValues(array);
+                                    deviceId = 'dev-' + Array.from(array, b => b.toString(16).padStart(2, '0')).join('');
+                                }
+                                
+                                await setDeviceId(db, deviceId);
+                                console.log('Nuovo device ID creato:', deviceId);
+                            } else {
+                                console.log('Device ID esistente trovato:', deviceId);
+                            }
+                            
+                            return deviceId;
+                            
+                        } catch (error) {
+                            console.error('Errore IndexedDB:', error);
+                            
+                            // Fallback a localStorage
+                            try {
+                                let deviceId = localStorage.getItem('workout_device_id');
+                                if (!deviceId) {
+                                    deviceId = 'dev-' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36));
+                                    localStorage.setItem('workout_device_id', deviceId);
+                                }
+                                return deviceId;
+                            } catch (e2) {
+                                console.error('Errore localStorage:', e2);
+                                // Ultimo fallback: session-based
+                                return 'session-' + Date.now().toString(36) + '-' + Math.random().toString(36).substr(2, 9);
+                            }
+                        }
+                    }
+                    
+                    // Esegui
+                    getOrCreateDeviceId().then(deviceId => {
+                        window.parent.postMessage({
+                            type: 'streamlit:setComponentValue',
+                            data: deviceId
+                        }, '*');
+                    }).catch(error => {
+                        console.error('Errore fatale:', error);
+                        window.parent.postMessage({
+                            type: 'streamlit:setComponentValue',
+                            data: 'error-' + Date.now().toString(36)
+                        }, '*');
+                    });
+                })();
+            </script>
         </body>
         </html>
         """, height=0)
         
-        if result and isinstance(result, str) and len(result) > 5:
+        # Se abbiamo un risultato valido
+        if result and isinstance(result, str) and len(result) > 10:
             st.session_state.device_id = result
+            st.session_state.device_id_loaded = True
+            st.session_state.device_load_attempt = 0
             return result
-            
+        
     except Exception as e:
-        pass
+        print(f"Errore componente HTML: {e}")
     
-    # Fallback finale: genera ID basato su hash di session
-    if 'permanent_device_id' not in st.session_state:
+    # Se non abbiamo ancora il device_id dopo alcuni tentativi
+    st.session_state.device_load_attempt += 1
+    
+    if st.session_state.device_load_attempt >= 5:
+        # Dopo 5 tentativi, genera un device ID permanente per la sessione
         import uuid
-        st.session_state.permanent_device_id = f"session-{str(uuid.uuid4())[:8]}"
-    
-    st.session_state.device_id = st.session_state.permanent_device_id
-    return st.session_state.permanent_device_id
+        if 'permanent_device_id' not in st.session_state:
+            st.session_state.permanent_device_id = f"session-{str(uuid.uuid4())}"
+        
+        st.session_state.device_id = st.session_state.permanent_device_id
+        st.session_state.device_id_loaded = True
+        return st.session_state.permanent_device_id
+    else:
+        # Mostra un placeholder temporaneo e aspetta
+        if 'device_id' not in st.session_state:
+            st.session_state.device_id = f"loading-{st.session_state.device_load_attempt}"
+        return st.session_state.device_id
     
 
 def check_login_expiry(login_date_str):
@@ -319,24 +380,33 @@ def show_login_page():
         st.session_state.login_check_done = True
     
     # STEP 3: Mostra form di login
+    # STEP 3: Mostra form di login
     st.title("🔐 Login - Workout Tracker")
     
-    # Mostra tipo di identificazione dispositivo
-    if device_id.startswith('fp-'):
-        st.success(f"✅ **Dispositivo Identificato** tramite fingerprint: `{device_id[:12]}...`")
-        st.caption("Il tuo dispositivo viene riconosciuto automaticamente senza cookies")
+    # Mostra stato dispositivo
+    if device_id.startswith('dev-'):
+        st.success(f"✅ **Dispositivo Registrato**: `{device_id[:20]}...`")
+        st.caption("🔒 Il tuo dispositivo è identificato in modo persistente")
     elif device_id.startswith('session-'):
-        st.warning("⚠️ **Modalità Sessione**: Login limitato a questa sessione del browser")
-        with st.expander("ℹ️ Perché vedo questo messaggio?"):
+        st.warning("⚠️ **Modalità Sessione**: Login limitato a questa sessione")
+        with st.expander("ℹ️ Perché vedo questo?"):
             st.markdown("""
-            Il browser non supporta il riconoscimento automatico del dispositivo.
-            Questo può accadere in:
+            **Possibili cause:**
             - Modalità navigazione privata/incognito
-            - Browser con restrizioni severe
-            - Alcune app mobile
+            - Storage del browser disabilitato
+            - Estensioni che bloccano storage
             
-            **Soluzione:** Usa un browser standard (Chrome, Firefox, Safari) in modalità normale.
+            **Per abilitare il ricordo automatico:**
+            1. Esci dalla modalità incognito
+            2. Vai in Impostazioni Chrome → Privacy → Cookie
+            3. Assicurati che "Consenti tutti i cookie" sia attivo
+            4. Ricarica la pagina
             """)
+    elif device_id.startswith('loading-'):
+        st.info("⏳ Inizializzazione dispositivo...")
+        import time
+        time.sleep(1)
+        st.rerun()
     
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
