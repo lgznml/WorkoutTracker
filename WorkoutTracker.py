@@ -19,7 +19,7 @@ GIORNI = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato",
 # ============================================================================
 
 def set_user_cookie(username):
-    """Imposta/aggiorna localStorage con username, login date e deviceId; ritorna il deviceId generato/letto."""
+"""Imposta/aggiorna localStorage con username, login date e deviceId; ritorna il deviceId generato/letto."""
     # Il componente JS restituisce un oggetto {username, loginDate, deviceId}
     result = components.html(f"""
     <!DOCTYPE html>
