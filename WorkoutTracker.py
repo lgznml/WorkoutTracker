@@ -393,20 +393,6 @@ def show_login_page():
             **Device ID attuale:** `{}`
             """.format(device_id[:20] + "..."))
     
-    # Debug info (rimuovi in produzione)
-    if st.checkbox("🔧 Mostra info debug", value=False):
-        st.code(f"Device ID completo: {device_id}")
-        st.code(f"Tentativi di caricamento: {st.session_state.get('device_load_attempt', 0)}")
-        st.code(f"Device ID caricato: {st.session_state.get('device_id_loaded', False)}")
-        
-        # Test localStorage
-        test_result = test_device_persistence()
-        if test_result:
-            if test_result.get('localStorageWorks'):
-                st.success("✅ localStorage funzionante")
-            else:
-                st.error(f"❌ localStorage non disponibile: {test_result.get('error', 'Errore sconosciuto')}")
-    
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         st.markdown("### Accedi al tuo account")
