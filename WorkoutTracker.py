@@ -109,6 +109,9 @@ def load_template_from_sheets():
                 st.session_state.workout_template[day] = json.loads(exercises_json)
         
         return True
+    except Exception as e:
+        st.error(f"Errore caricamento template: {e}")
+        return False
 
 def save_config_to_sheets():
     """Salva la configurazione (data inizio scheda)"""
