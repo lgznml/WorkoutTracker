@@ -215,6 +215,9 @@ def load_weight_calories_from_sheets():
             st.session_state.weight_calories_history.append(entry)
         
         return True
+    except Exception as e:
+        st.error(f"Errore caricamento peso/calorie: {e}")
+        return False
         
 def save_history_to_sheets():
     """Salva lo storico su Google Sheets"""
