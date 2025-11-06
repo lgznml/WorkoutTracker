@@ -250,6 +250,9 @@ def save_history_to_sheets():
             worksheet.append_rows(data)
         
         return True
+    except Exception as e:
+        st.error(f"Errore salvataggio storico: {e}")
+        return False
         
 def load_history_from_sheets():
     """Carica lo storico da Google Sheets"""
@@ -269,8 +272,11 @@ def load_history_from_sheets():
                 'esercizi': json.loads(record.get('Esercizi_JSON', '[]'))
             }
             st.session_state.workout_history.append(session)
-        
+    
         return True
+    except Exception as e:
+        st.error(f"Errore caricamento storico: {e}")
+        return False
 
 def save_all_data():
     """Salva tutto"""
