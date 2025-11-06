@@ -14,462 +14,6 @@ st.set_page_config(page_title="Workout Tracker", page_icon="💪", layout="wide"
 # Giorni della settimana
 GIORNI = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato", "Domenica"]
 
-# ============================================================================
-# ← SEZIONE NUOVA: FUNZIONI DI AUTENTICAZIONE
-# ============================================================================
-
-def generate_or_get_device_id():
-    """Genera o recupera un deviceId PERSISTENTE usando IndexedDB (più affidabile di localStorage)"""
-    
-    # Se già abbiamo il device_id in questa sessione, usalo
-    if 'device_id' in st.session_state and st.session_state.device_id and not st.session_state.device_id.startswith('loading'):
-        return st.session_state.device_id
-    
-    # Inizializza il contatore se non esiste
-    if 'device_load_attempt' not in st.session_state:
-        st.session_state.device_load_attempt = 0
-    
-    try:
-        result = components.html("""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="UTF-8">
-        </head>
-        <body>
-            <script>
-                (function(){
-                    // Usa IndexedDB invece di localStorage (più persistente)
-                    function openDatabase() {
-                        return new Promise((resolve, reject) => {
-                            const request = indexedDB.open('WorkoutTrackerDB', 1);
-                            
-                            request.onerror = () => reject(request.error);
-                            request.onsuccess = () => resolve(request.result);
-                            
-                            request.onupgradeneeded = (event) => {
-                                const db = event.target.result;
-                                if (!db.objectStoreNames.contains('deviceStore')) {
-                                    db.createObjectStore('deviceStore');
-                                }
-                            };
-                        });
-                    }
-                    
-                    function getDeviceId(db) {
-                        return new Promise((resolve, reject) => {
-                            const transaction = db.transaction(['deviceStore'], 'readonly');
-                            const store = transaction.objectStore('deviceStore');
-                            const request = store.get('deviceId');
-                            
-                            request.onsuccess = () => resolve(request.result);
-                            request.onerror = () => reject(request.error);
-                        });
-                    }
-                    
-                    function setDeviceId(db, deviceId) {
-                        return new Promise((resolve, reject) => {
-                            const transaction = db.transaction(['deviceStore'], 'readwrite');
-                            const store = transaction.objectStore('deviceStore');
-                            const request = store.put(deviceId, 'deviceId');
-                            
-                            request.onsuccess = () => resolve(deviceId);
-                            request.onerror = () => reject(request.error);
-                        });
-                    }
-                    
-                    async function getOrCreateDeviceId() {
-                        try {
-                            const db = await openDatabase();
-                            let deviceId = await getDeviceId(db);
-                            
-                            if (!deviceId) {
-                                // Genera ID crittograficamente sicuro
-                                if (crypto && crypto.randomUUID) {
-                                    deviceId = 'dev-' + crypto.randomUUID();
-                                } else {
-                                    // Fallback per browser vecchi
-                                    const array = new Uint8Array(16);
-                                    crypto.getRandomValues(array);
-                                    deviceId = 'dev-' + Array.from(array, b => b.toString(16).padStart(2, '0')).join('');
-                                }
-                                
-                                await setDeviceId(db, deviceId);
-                                console.log('Nuovo device ID creato:', deviceId);
-                            } else {
-                                console.log('Device ID esistente trovato:', deviceId);
-                            }
-                            
-                            return deviceId;
-                            
-                        } catch (error) {
-                            console.error('Errore IndexedDB:', error);
-                            
-                            // Fallback a localStorage
-                            try {
-                                let deviceId = localStorage.getItem('workout_device_id');
-                                if (!deviceId) {
-                                    deviceId = 'dev-' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36));
-                                    localStorage.setItem('workout_device_id', deviceId);
-                                }
-                                return deviceId;
-                            } catch (e2) {
-                                console.error('Errore localStorage:', e2);
-                                // Ultimo fallback: session-based
-                                return 'session-' + Date.now().toString(36) + '-' + Math.random().toString(36).substr(2, 9);
-                            }
-                        }
-                    }
-                    
-                    // Esegui
-                    getOrCreateDeviceId().then(deviceId => {
-                        window.parent.postMessage({
-                            type: 'streamlit:setComponentValue',
-                            data: deviceId
-                        }, '*');
-                    }).catch(error => {
-                        console.error('Errore fatale:', error);
-                        window.parent.postMessage({
-                            type: 'streamlit:setComponentValue',
-                            data: 'error-' + Date.now().toString(36)
-                        }, '*');
-                    });
-                })();
-            </script>
-        </body>
-        </html>
-        """, height=0)
-        
-        # Se abbiamo un risultato valido
-        if result and isinstance(result, str) and len(result) > 10:
-            st.session_state.device_id = result
-            st.session_state.device_id_loaded = True
-            st.session_state.device_load_attempt = 0
-            return result
-        
-    except Exception as e:
-        print(f"Errore componente HTML: {e}")
-    
-    # Se non abbiamo ancora il device_id dopo alcuni tentativi
-    st.session_state.device_load_attempt += 1
-    
-    if st.session_state.device_load_attempt >= 5:
-        # Dopo 5 tentativi, genera un device ID permanente per la sessione
-        import uuid
-        if 'permanent_device_id' not in st.session_state:
-            st.session_state.permanent_device_id = f"session-{str(uuid.uuid4())}"
-        
-        st.session_state.device_id = st.session_state.permanent_device_id
-        st.session_state.device_id_loaded = True
-        return st.session_state.permanent_device_id
-    else:
-        # Mostra un placeholder temporaneo e aspetta
-        if 'device_id' not in st.session_state:
-            st.session_state.device_id = f"loading-{st.session_state.device_load_attempt}"
-        return st.session_state.device_id
-    
-
-def check_login_expiry(login_date_str):
-    """Verifica se sono passati più di 30 giorni dall'ultimo login"""
-    if not login_date_str:
-        return True
-    
-    try:
-        login_date = datetime.strptime(login_date_str, "%Y-%m-%d")
-        days_passed = (datetime.now() - login_date).days
-        return days_passed > 30
-    except:
-        return True
-        
-def hash_password(password):
-    """Crea hash della password"""
-    return hashlib.sha256(password.encode()).hexdigest()
-
-def verify_user_exists(username):
-    """Verifica se l'utente esiste (senza password)"""
-    try:
-        worksheet = get_worksheet("Users")
-        if not worksheet:
-            return False
-        
-        records = worksheet.get_all_records()
-        return any(record.get('Username') == username for record in records)
-    except:
-        return False
-
-def save_device_mapping_to_sheets(device_id, username):
-    """Salva/aggiorna la mappatura DeviceID -> LastUsername + LastLoginDate nel worksheet 'Devices'."""
-    try:
-        if not device_id or not username:
-            return False
-        worksheet = get_worksheet("Devices")
-        if not worksheet:
-            return False
-
-        # Assicurati header
-        try:
-            headers = worksheet.row_values(1)
-            if not headers or headers[0] != 'DeviceID':
-                worksheet.update('A1', [['DeviceID', 'LastUsername', 'LastLoginDate', 'AutoLoginEnabled']])
-        except:
-            worksheet.update('A1', [['DeviceID', 'LastUsername', 'LastLoginDate', 'AutoLoginEnabled']])
-
-        all_records = worksheet.get_all_records()
-        row_to_update = None
-        for i, record in enumerate(all_records, start=2):
-            if record.get('DeviceID') == device_id:
-                row_to_update = i
-                break
-
-        now_str = datetime.now().strftime("%Y-%m-%d")
-        if row_to_update:
-            worksheet.update(f'A{row_to_update}:D{row_to_update}', [[device_id, username, now_str, 'YES']])
-        else:
-            worksheet.append_row([device_id, username, now_str, 'YES'])
-
-        return True
-    except Exception as e:
-        st.error(f"Errore salvataggio device mapping: {e}")
-        return False
-
-def load_device_mapping_from_sheets(device_id):
-    """Carica la mappatura per un device_id. Ritorna dict {'username':..., 'last_login':..., 'auto_login':...} o None."""
-    try:
-        if not device_id:
-            return None
-        worksheet = get_worksheet("Devices")
-        if not worksheet:
-            return None
-
-        all_records = worksheet.get_all_records()
-        for record in all_records:
-            if record.get('DeviceID') == device_id:
-                return {
-                    'username': record.get('LastUsername'),
-                    'last_login': record.get('LastLoginDate'),
-                    'auto_login': record.get('AutoLoginEnabled', 'YES') == 'YES'
-                }
-        return None
-    except Exception as e:
-        st.error(f"Errore caricamento device mapping: {e}")
-        return None
-
-def disable_auto_login_for_device(device_id):
-    """Disabilita l'auto-login per un dispositivo specifico"""
-    try:
-        if not device_id:
-            return False
-        worksheet = get_worksheet("Devices")
-        if not worksheet:
-            return False
-
-        all_records = worksheet.get_all_records()
-        for i, record in enumerate(all_records, start=2):
-            if record.get('DeviceID') == device_id:
-                worksheet.update(f'D{i}', [['NO']])
-                return True
-        return False
-    except Exception as e:
-        st.error(f"Errore disabilitazione auto-login: {e}")
-        return False
-
-def test_device_persistence():
-    """Testa se il localStorage funziona correttamente"""
-    try:
-        result = components.html("""
-        <!DOCTYPE html>
-        <html>
-        <body>
-        <script>
-            (function(){
-                try {
-                    // Test localStorage
-                    var testKey = 'workout_test_' + Date.now();
-                    localStorage.setItem(testKey, 'test');
-                    var retrieved = localStorage.getItem(testKey);
-                    localStorage.removeItem(testKey);
-                    
-                    var works = (retrieved === 'test');
-                    
-                    window.parent.postMessage({
-                        type: 'streamlit:setComponentValue',
-                        data: { 
-                            localStorageWorks: works,
-                            error: null
-                        }
-                    }, '*');
-                } catch (e) {
-                    window.parent.postMessage({
-                        type: 'streamlit:setComponentValue',
-                        data: { 
-                            localStorageWorks: false,
-                            error: e.message
-                        }
-                    }, '*');
-                }
-            })();
-        </script>
-        </body>
-        </html>
-        """, height=0)
-        
-        return result if result else {'localStorageWorks': False, 'error': 'Nessun risultato'}
-    except Exception as e:
-        return {'localStorageWorks': False, 'error': str(e)}
-    
-def verify_user(username, password):
-    """Verifica le credenziali utente"""
-    try:
-        worksheet = get_worksheet("Users")
-        if not worksheet:
-            return False
-        
-        records = worksheet.get_all_records()
-        for record in records:
-            if record.get('Username') == username:
-                stored_password = record.get('Password', '')
-                # Supporta sia password in chiaro (per migrazione) che hash
-                if stored_password == password or stored_password == hash_password(password):
-                    return True
-        return False
-    except Exception as e:
-        st.error(f"Errore verifica utente: {e}")
-        return False
-
-def get_user_full_name(username):
-    """Ottiene il nome completo dell'utente"""
-    try:
-        worksheet = get_worksheet("Users")
-        if not worksheet:
-            return username
-        
-        records = worksheet.get_all_records()
-        for record in records:
-            if record.get('Username') == username:
-                return record.get('Nome_Completo', username)
-        return username
-    except:
-        return username
-
-def show_login_page():
-    """Mostra la pagina di login con auto-login basato su device"""
-    
-    # STEP 1: Ottieni il device_id
-    device_id = generate_or_get_device_id()
-    
-    # STEP 2: Controlla auto-login SOLO se non è già stato fatto e device_id è valido
-    if not st.session_state.get('login_check_done', False) and device_id and not device_id.startswith('session-'):
-        with st.spinner("🔄 Controllo sessione..."):
-            mapping = load_device_mapping_from_sheets(device_id)
-            
-            if mapping and mapping.get('auto_login') and mapping.get('username'):
-                mapped_user = mapping.get('username')
-                mapped_login_date = mapping.get('last_login')
-                
-                if not check_login_expiry(mapped_login_date):
-                    if verify_user_exists(mapped_user):
-                        st.session_state.logged_in = True
-                        st.session_state.current_user = mapped_user
-                        st.session_state.user_full_name = get_user_full_name(mapped_user)
-                        st.session_state.login_check_done = True
-                        save_device_mapping_to_sheets(device_id, mapped_user)
-                        st.rerun()
-                    else:
-                        disable_auto_login_for_device(device_id)
-        
-        st.session_state.login_check_done = True
-    
-    # STEP 3: Mostra form di login
-    # STEP 3: Mostra form di login
-    st.title("🔐 Login - Workout Tracker")
-    
-    # Mostra stato dispositivo
-    if device_id.startswith('dev-'):
-        st.success(f"✅ **Dispositivo Registrato**: `{device_id[:20]}...`")
-        st.caption("🔒 Il tuo dispositivo è identificato in modo persistente")
-    elif device_id.startswith('session-'):
-        st.warning("⚠️ **Modalità Sessione**: Login limitato a questa sessione")
-        with st.expander("ℹ️ Perché vedo questo?"):
-            st.markdown("""
-            **Possibili cause:**
-            - Modalità navigazione privata/incognito
-            - Storage del browser disabilitato
-            - Estensioni che bloccano storage
-            
-            **Per abilitare il ricordo automatico:**
-            1. Esci dalla modalità incognito
-            2. Vai in Impostazioni Chrome → Privacy → Cookie
-            3. Assicurati che "Consenti tutti i cookie" sia attivo
-            4. Ricarica la pagina
-            """)
-    elif device_id.startswith('loading-'):
-        st.info("⏳ Inizializzazione dispositivo...")
-        import time
-        time.sleep(1)
-        st.rerun()
-    
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.markdown("### Accedi al tuo account")
-        
-        username = st.text_input("Username", key="login_username")
-        password = st.text_input("Password", type="password", key="login_password")
-        
-        # Mostra checkbox solo se device_id è valido
-        remember_me = st.checkbox(
-            "🔒 Ricordami per 30 giorni su questo dispositivo", 
-            value=device_id.startswith('fp-'),
-            disabled=device_id.startswith('session-')
-        )
-
-def show_register_page():
-    """Mostra la pagina di registrazione"""
-    st.title("📝 Registrazione - Workout Tracker")
-    
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.markdown("### Crea un nuovo account")
-        
-        new_username = st.text_input("Username (sarà visibile)", key="reg_username")
-        new_full_name = st.text_input("Nome Completo", key="reg_fullname")
-        new_password = st.text_input("Password", type="password", key="reg_password")
-        new_password_confirm = st.text_input("Conferma Password", type="password", key="reg_password_confirm")
-        
-        col_btn1, col_btn2 = st.columns(2)
-        with col_btn1:
-            if st.button("✅ Registrati", use_container_width=True):
-                if not new_username or not new_full_name or not new_password:
-                    st.error("⚠️ Compila tutti i campi")
-                elif new_password != new_password_confirm:
-                    st.error("⚠️ Le password non coincidono")
-                elif len(new_password) < 6:
-                    st.error("⚠️ Password troppo corta (minimo 6 caratteri)")
-                else:
-                    # Verifica che username non esista già
-                    try:
-                        worksheet = get_worksheet("Users")
-                        records = worksheet.get_all_records()
-                        if any(r.get('Username') == new_username for r in records):
-                            st.error("⚠️ Username già esistente")
-                        else:
-                            # Aggiungi nuovo utente
-                            new_row = [new_username, new_password, new_full_name]
-                            worksheet.append_row(new_row)
-                            st.success("✅ Registrazione completata! Effettua il login.")
-                            st.session_state.show_register = False
-                            st.rerun()
-                    except Exception as e:
-                        st.error(f"❌ Errore durante la registrazione: {e}")
-        
-        with col_btn2:
-            if st.button("🔙 Torna al Login", use_container_width=True):
-                st.session_state.show_register = False
-                st.rerun()
-
-# ============================================================================
-# ← FINE SEZIONE NUOVA
-# ============================================================================
-
 # --- CONNESSIONE GOOGLE SHEETS ---
 @st.cache_resource
 def get_gsheet_client():
@@ -515,9 +59,8 @@ def get_worksheet(sheet_name):
         return None
 
 def save_template_to_sheets():
-    """Salva il template su Google Sheets - SAFE per multi-utente"""
+    """Salva il template su Google Sheets"""
     try:
-        username = st.session_state.current_user
         worksheet = get_worksheet("Template")
         if not worksheet:
             return False
@@ -525,40 +68,30 @@ def save_template_to_sheets():
         # Assicurati che esista l'header
         try:
             headers = worksheet.row_values(1)
-            if not headers or headers[0] != 'Username':
-                worksheet.update('A1', [['Username', 'Giorno', 'Esercizio_JSON']])
+            if not headers or headers[0] != 'Giorno':
+                worksheet.update('A1', [['Giorno', 'Esercizio_JSON']])
         except:
-            worksheet.update('A1', [['Username', 'Giorno', 'Esercizio_JSON']])
+            worksheet.update('A1', [['Giorno', 'Esercizio_JSON']])
         
-        # Trova tutte le righe dell'utente corrente e eliminale
+        # Elimina tutte le righe esistenti (tranne header)
         all_records = worksheet.get_all_records()
-        rows_to_delete = []
-        for i, record in enumerate(all_records, start=2):  # start=2 perché row 1 è l'header
-            if record.get('Username') == username:
-                rows_to_delete.append(i)
+        if all_records:
+            worksheet.delete_rows(2, len(all_records) + 1)
         
-        # Elimina le righe dell'utente dall'alto verso il basso (per non sballare gli indici)
-        for row_idx in sorted(rows_to_delete, reverse=True):
-            worksheet.delete_rows(row_idx)
-        
-        # Aggiungi i nuovi dati dell'utente
+        # Aggiungi i nuovi dati
         data = []
         for day, exercises in st.session_state.workout_template.items():
             if exercises:
-                data.append([username, day, json.dumps(exercises, ensure_ascii=False)])
+                data.append([day, json.dumps(exercises, ensure_ascii=False)])
         
         if data:
             worksheet.append_rows(data)
         
         return True
-    except Exception as e:
-        st.error(f"Errore salvataggio template: {e}")
-        return False
         
 def load_template_from_sheets():
     """Carica il template da Google Sheets"""
     try:
-        username = st.session_state.current_user  # ← AGGIUNTO
         worksheet = get_worksheet("Template")
         if not worksheet:
             return False
@@ -566,106 +99,78 @@ def load_template_from_sheets():
         records = worksheet.get_all_records()
         st.session_state.workout_template = {day: [] for day in GIORNI}
         
-        # ← MODIFICATO: Filtra solo i dati dell'utente corrente
         for record in records:
-            if record.get('Username') == username:  # ← AGGIUNTO
-                day = record.get('Giorno')
-                exercises_json = record.get('Esercizio_JSON')
-                if day and exercises_json:
-                    st.session_state.workout_template[day] = json.loads(exercises_json)
+            day = record.get('Giorno')
+            exercises_json = record.get('Esercizio_JSON')
+            if day and exercises_json:
+                st.session_state.workout_template[day] = json.loads(exercises_json)
         
         return True
-    except Exception as e:
-        st.error(f"Errore caricamento template: {e}")
-        return False
 
 def save_config_to_sheets():
-    """Salva la configurazione (data inizio scheda) - SAFE per multi-utente"""
+    """Salva la configurazione (data inizio scheda)"""
     try:
-        username = st.session_state.current_user
         worksheet = get_worksheet("Config")
         if not worksheet:
             return False
         
-        # Assicurati che esista l'header
         try:
             headers = worksheet.row_values(1)
-            if not headers or headers[0] != 'Username':
-                worksheet.update('A1', [['Username', 'Chiave', 'Valore']])
+            if not headers or headers[0] != 'Chiave':
+                worksheet.update('A1', [['Chiave', 'Valore']])
         except:
-            worksheet.update('A1', [['Username', 'Chiave', 'Valore']])
+            worksheet.update('A1', [['Chiave', 'Valore']])
         
-        # Trova la riga dell'utente corrente per 'data_inizio_scheda'
         all_records = worksheet.get_all_records()
         row_to_update = None
         for i, record in enumerate(all_records, start=2):
-            if record.get('Username') == username and record.get('Chiave') == 'data_inizio_scheda':
+            if record.get('Chiave') == 'data_inizio_scheda':
                 row_to_update = i
                 break
         
-        # Aggiorna o aggiungi
         if row_to_update:
-            worksheet.update(f'A{row_to_update}:C{row_to_update}', 
-                           [[username, 'data_inizio_scheda', st.session_state.data_inizio_scheda]])
+            worksheet.update(f'A{row_to_update}:B{row_to_update}', 
+                           [['data_inizio_scheda', st.session_state.data_inizio_scheda]])
         else:
-            worksheet.append_row([username, 'data_inizio_scheda', st.session_state.data_inizio_scheda])
+            worksheet.append_row(['data_inizio_scheda', st.session_state.data_inizio_scheda])
         
         return True
-    except Exception as e:
-        st.error(f"Errore salvataggio config: {e}")
-        return False
-
+        
 def load_config_from_sheets():
     """Carica la configurazione"""
     try:
-        username = st.session_state.current_user  # ← AGGIUNTO
         worksheet = get_worksheet("Config")
         if not worksheet:
             return False
         
         records = worksheet.get_all_records()
-        # ← MODIFICATO: Filtra per utente
         for record in records:
-            if record.get('Username') == username and record.get('Chiave') == 'data_inizio_scheda':  # ← MODIFICATO
+            if record.get('Chiave') == 'data_inizio_scheda':
                 st.session_state.data_inizio_scheda = record.get('Valore', '')
         
         return True
-    except Exception as e:
-        st.error(f"Errore caricamento config: {e}")
-        return False
 
 def save_weight_calories_to_sheets():
     """Salva lo storico peso e calorie su Google Sheets"""
     try:
-        username = st.session_state.current_user
         worksheet = get_worksheet("WeightCalories")
         if not worksheet:
             return False
         
-        # Assicurati che esista l'header
         try:
             headers = worksheet.row_values(1)
-            if not headers or headers[0] != 'Username':
-                worksheet.update('A1', [['Username', 'Data', 'Peso', 'Calorie']])
+            if not headers or headers[0] != 'Data':
+                worksheet.update('A1', [['Data', 'Peso', 'Calorie']])
         except:
-            worksheet.update('A1', [['Username', 'Data', 'Peso', 'Calorie']])
+            worksheet.update('A1', [['Data', 'Peso', 'Calorie']])
         
-        # Trova tutte le righe dell'utente corrente e eliminale
         all_records = worksheet.get_all_records()
-        rows_to_delete = []
-        for i, record in enumerate(all_records, start=2):
-            if record.get('Username') == username:
-                rows_to_delete.append(i)
+        if all_records:
+            worksheet.delete_rows(2, len(all_records) + 1)
         
-        # Elimina le righe dell'utente dall'alto verso il basso
-        for row_idx in sorted(rows_to_delete, reverse=True):
-            worksheet.delete_rows(row_idx)
-        
-        # Aggiungi tutti i dati dell'utente
         data = []
         for entry in st.session_state.weight_calories_history:
             data.append([
-                username,
                 entry['data'],
                 entry['peso'],
                 entry['calorie']
@@ -675,14 +180,10 @@ def save_weight_calories_to_sheets():
             worksheet.append_rows(data)
         
         return True
-    except Exception as e:
-        st.error(f"Errore salvataggio peso/calorie: {e}")
-        return False
 
 def load_weight_calories_from_sheets():
     """Carica lo storico peso e calorie da Google Sheets"""
     try:
-        username = st.session_state.current_user
         worksheet = get_worksheet("WeightCalories")
         if not worksheet:
             return False
@@ -690,53 +191,37 @@ def load_weight_calories_from_sheets():
         records = worksheet.get_all_records()
         st.session_state.weight_calories_history = []
         
-        # Filtra per utente
         for record in records:
-            if record.get('Username') == username:
-                entry = {
-                    'data': record.get('Data'),
-                    'peso': record.get('Peso', ''),
-                    'calorie': record.get('Calorie', '')
-                }
-                st.session_state.weight_calories_history.append(entry)
+            entry = {
+                'data': record.get('Data'),
+                'peso': record.get('Peso', ''),
+                'calorie': record.get('Calorie', '')
+            }
+            st.session_state.weight_calories_history.append(entry)
         
         return True
-    except Exception as e:
-        st.error(f"Errore caricamento peso/calorie: {e}")
-        return False
         
 def save_history_to_sheets():
-    """Salva lo storico su Google Sheets - SAFE per multi-utente"""
+    """Salva lo storico su Google Sheets"""
     try:
-        username = st.session_state.current_user
         worksheet = get_worksheet("History")
         if not worksheet:
             return False
         
-        # Assicurati che esista l'header
         try:
             headers = worksheet.row_values(1)
-            if not headers or headers[0] != 'Username':
-                worksheet.update('A1', [['Username', 'Data', 'Giorno', 'Settimana', 'Esercizi_JSON']])
+            if not headers or headers[0] != 'Data':
+                worksheet.update('A1', [['Data', 'Giorno', 'Settimana', 'Esercizi_JSON']])
         except:
-            worksheet.update('A1', [['Username', 'Data', 'Giorno', 'Settimana', 'Esercizi_JSON']])
+            worksheet.update('A1', [['Data', 'Giorno', 'Settimana', 'Esercizi_JSON']])
         
-        # Trova tutte le righe dell'utente corrente e eliminale
         all_records = worksheet.get_all_records()
-        rows_to_delete = []
-        for i, record in enumerate(all_records, start=2):
-            if record.get('Username') == username:
-                rows_to_delete.append(i)
+        if all_records:
+            worksheet.delete_rows(2, len(all_records) + 1)
         
-        # Elimina le righe dell'utente dall'alto verso il basso
-        for row_idx in sorted(rows_to_delete, reverse=True):
-            worksheet.delete_rows(row_idx)
-        
-        # Aggiungi tutti gli allenamenti dell'utente
         data = []
         for session in st.session_state.workout_history:
             data.append([
-                username,
                 session['data'],
                 session['giorno'],
                 session.get('settimana', 1),
@@ -747,14 +232,10 @@ def save_history_to_sheets():
             worksheet.append_rows(data)
         
         return True
-    except Exception as e:
-        st.error(f"Errore salvataggio storico: {e}")
-        return False
         
 def load_history_from_sheets():
     """Carica lo storico da Google Sheets"""
     try:
-        username = st.session_state.current_user  # ← AGGIUNTO
         worksheet = get_worksheet("History")
         if not worksheet:
             return False
@@ -762,21 +243,16 @@ def load_history_from_sheets():
         records = worksheet.get_all_records()
         st.session_state.workout_history = []
         
-        # ← MODIFICATO: Filtra per utente
         for record in records:
-            if record.get('Username') == username:  # ← AGGIUNTO
-                session = {
-                    'data': record.get('Data'),
-                    'giorno': record.get('Giorno'),
-                    'settimana': record.get('Settimana', 1),
-                    'esercizi': json.loads(record.get('Esercizi_JSON', '[]'))
-                }
-                st.session_state.workout_history.append(session)
+            session = {
+                'data': record.get('Data'),
+                'giorno': record.get('Giorno'),
+                'settimana': record.get('Settimana', 1),
+                'esercizi': json.loads(record.get('Esercizi_JSON', '[]'))
+            }
+            st.session_state.workout_history.append(session)
         
         return True
-    except Exception as e:
-        st.error(f"Errore caricamento storico: {e}")
-        return False
 
 def save_all_data():
     """Salva tutto"""
@@ -810,23 +286,6 @@ def calculate_current_week(start_date_str, current_date):
 
 def init_session_state():
     """Inizializza la struttura dati"""
-    if 'login_check_done' not in st.session_state:
-        st.session_state.login_check_done = False
-    
-    # NON generare device_id qui - verrà generato da generate_or_get_device_id()
-    # quando necessario, per permettere al componente HTML di caricarsi correttamente
-    
-    if 'logged_in' not in st.session_state:
-        st.session_state.logged_in = False
-    
-    if 'current_user' not in st.session_state:
-        st.session_state.current_user = None
-    
-    if 'user_full_name' not in st.session_state:
-        st.session_state.user_full_name = None
-    
-    if 'show_register' not in st.session_state:
-        st.session_state.show_register = False
     
     if 'workout_template' not in st.session_state:
         st.session_state.workout_template = {day: [] for day in GIORNI}
@@ -840,8 +299,8 @@ def init_session_state():
     if 'weight_calories_history' not in st.session_state:
         st.session_state.weight_calories_history = []
         
-    # Carica dati solo se loggato
-    if 'data_loaded' not in st.session_state and st.session_state.logged_in:
+    # Carica dati all'avvio
+    if 'data_loaded' not in st.session_state:
         load_all_data()
         st.session_state.data_loaded = True
 
@@ -908,95 +367,8 @@ def get_last_weight_for_exercise(exercise_name):
 
 # Inizializza
 init_session_state()
-
-# CONTROLLA LOGIN
-if not st.session_state.logged_in:
-    # Mostra pagina appropriata
-    if st.session_state.get('show_register', False):
-        show_register_page()
-    else:
-        show_login_page()
-    st.stop()
     
-# Sidebar
 st.sidebar.title("💪 Workout Tracker")
-
-# Info utente e logout
-st.sidebar.markdown(f"👤 **{st.session_state.user_full_name}**")
-
-col_logout1, col_logout2 = st.sidebar.columns([2, 1])
-with col_logout1:
-    if st.button("🚪 Logout", use_container_width=True):
-        # Disabilita auto-login per questo dispositivo
-        device_id = st.session_state.get('device_id')
-        if device_id:
-            disable_auto_login_for_device(device_id)
-        
-        # Pulisci sessione
-        st.session_state.logged_in = False
-        st.session_state.current_user = None
-        st.session_state.user_full_name = None
-        st.session_state.data_loaded = False
-        st.session_state.login_check_done = False
-        st.session_state.workout_template = {day: [] for day in GIORNI}
-        st.session_state.workout_history = []
-        st.session_state.weight_calories_history = []
-        st.session_state.data_inizio_scheda = "2025-11-03"
-        st.rerun()
-
-with col_logout2:
-    if st.button("ℹ️", use_container_width=True, help="Info dispositivo"):
-        device_id = st.session_state.get('device_id', 'Non disponibile')
-        st.sidebar.info(f"**Device ID:**\n`{device_id[:8]}...`")
-        
-# Dopo il blocco logout, aggiungi questa sezione
-if st.sidebar.button("🔄 Reset Device ID", help="Genera un nuovo device ID se ci sono problemi"):
-    if 'device_id' in st.session_state:
-        old_device = st.session_state.device_id
-        # Rimuovi il device ID da localStorage
-        components.html("""
-        <script>
-            try {
-                localStorage.removeItem('workout_device_id');
-                console.log('Device ID rimosso da localStorage');
-            } catch(e) {
-                console.error('Errore rimozione device ID:', e);
-            }
-        </script>
-        """, height=0)
-        
-        # Pulisci session state
-        del st.session_state.device_id
-        st.session_state.device_load_attempt = 0
-        st.session_state.device_id_loaded = False
-        st.session_state.login_check_done = False
-        
-        st.sidebar.success("✅ Device ID resettato! Ricarica la pagina.")
-        st.rerun()
-        
-# Nel blocco sidebar, dopo il logout
-if st.sidebar.button("🔍 Diagnosi Dispositivo"):
-    with st.sidebar:
-        st.markdown("### 🔧 Diagnostica")
-        device_id = st.session_state.get('device_id', 'Non disponibile')
-        st.code(f"Device ID:\n{device_id}", language=None)
-        
-        if device_id:
-            mapping = load_device_mapping_from_sheets(device_id)
-            if mapping:
-                st.success("✅ Dispositivo registrato")
-                st.json(mapping)
-            else:
-                st.warning("⚠️ Dispositivo non registrato")
-        
-        # Test localStorage
-        test_result = test_device_persistence()
-        if test_result:
-            if test_result.get('localStorageWorks'):
-                st.success("✅ localStorage funzionante")
-            else:
-                st.error(f"❌ localStorage non disponibile: {test_result.get('error', 'Errore sconosciuto')}")
-                
 st.sidebar.markdown("---")
 
 # Configurazione Data Inizio Scheda
