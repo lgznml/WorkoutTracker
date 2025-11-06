@@ -88,6 +88,9 @@ def save_template_to_sheets():
             worksheet.append_rows(data)
         
         return True
+    except Exception as e:
+        st.error(f"Errore salvataggio template: {e}")
+        return False
         
 def load_template_from_sheets():
     """Carica il template da Google Sheets"""
