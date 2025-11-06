@@ -192,6 +192,9 @@ def save_weight_calories_to_sheets():
             worksheet.append_rows(data)
         
         return True
+    except Exception as e:
+        st.error(f"Errore salvataggio peso/calorie: {e}")
+        return False
 
 def load_weight_calories_from_sheets():
     """Carica lo storico peso e calorie da Google Sheets"""
