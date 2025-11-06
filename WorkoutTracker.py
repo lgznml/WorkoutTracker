@@ -141,6 +141,9 @@ def save_config_to_sheets():
             worksheet.append_row(['data_inizio_scheda', st.session_state.data_inizio_scheda])
         
         return True
+    except Exception as e:
+        st.error(f"Errore salvataggio configurazione: {e}")
+        return False
         
 def load_config_from_sheets():
     """Carica la configurazione"""
