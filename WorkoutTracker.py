@@ -158,6 +158,9 @@ def load_config_from_sheets():
                 st.session_state.data_inizio_scheda = record.get('Valore', '')
         
         return True
+    except Exception as e:
+        st.error(f"Errore caricamento configurazione: {e}")
+        return False
 
 def save_weight_calories_to_sheets():
     """Salva lo storico peso e calorie su Google Sheets"""
