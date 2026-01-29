@@ -827,7 +827,7 @@ elif menu == "⚖️ Peso e Calorie":
             entry_date = st.date_input("Data", value=date.today())
         
         with col2:
-            peso = st.number_input("Peso (kg)", min_value=0.0, max_value=300.0, step=0.1, format="%.1f")
+            peso = st.text_input("Peso (kg)")
         
         with col3:
             calorie = st.number_input("Calorie", min_value=0, max_value=10000, step=50)
@@ -846,7 +846,7 @@ elif menu == "⚖️ Peso e Calorie":
             # Aggiungi nuovo dato
             new_entry = {
                 'data': date_str,
-                'peso': str(peso) if peso > 0 else '',
+                'peso': peso.strip() if peso.strip() else '',
                 'calorie': str(calorie) if calorie > 0 else ''
             }
             st.session_state.weight_calories_history.append(new_entry)
@@ -870,7 +870,12 @@ elif menu == "⚖️ Peso e Calorie":
         
         for h in history:
             try:
-                weights.append(float(h['peso']) if h['peso'] else None)
+                if h['peso']:
+                    # Rimuovi eventuali caratteri non numerici tranne punto e virgola
+                    peso_str = h['peso'].replace(',', '.').strip()
+                    weights.append(float(peso_str))
+                else:
+                    weights.append(None)
             except:
                 weights.append(None)
             
