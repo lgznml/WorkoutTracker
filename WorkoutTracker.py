@@ -914,9 +914,12 @@ elif menu == "⚖️ Peso e Calorie":
         if valid_weights:
             valid_dates_w, valid_weight_values = zip(*valid_weights)
             
+            # Dividi per 100 solo per la visualizzazione
+            valid_weight_values_display = [w / 100 for w in valid_weight_values]
+            
             fig_weight.add_trace(go.Scatter(
                 x=valid_dates_w,
-                y=valid_weight_values,
+                y=valid_weight_values_display,
                 mode='lines+markers',
                 name='Peso',
                 line=dict(color='#3498db', width=3),
@@ -936,14 +939,14 @@ elif menu == "⚖️ Peso e Calorie":
             
             col1, col2, col3, col4 = st.columns(4)
             with col1:
-                st.metric("Peso Iniziale", f"{valid_weight_values[0]:.1f} kg")
+                st.metric("Peso Iniziale", f"{valid_weight_values[0] / 100:.1f} kg")
             with col2:
-                st.metric("Peso Attuale", f"{valid_weight_values[-1]:.1f} kg")
+                st.metric("Peso Attuale", f"{valid_weight_values[-1] / 100:.1f} kg")
             with col3:
-                diff = valid_weight_values[-1] - valid_weight_values[0]
+                diff = (valid_weight_values[-1] - valid_weight_values[0]) / 100
                 st.metric("Variazione", f"{diff:+.1f} kg")
             with col4:
-                avg = sum(valid_weight_values) / len(valid_weight_values)
+                avg = sum(valid_weight_values) / len(valid_weight_values) / 100
                 st.metric("Media", f"{avg:.1f} kg")
         else:
             st.info("Nessun dato di peso registrato")
