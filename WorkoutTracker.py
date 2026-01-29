@@ -207,10 +207,14 @@ def load_weight_calories_from_sheets():
         st.session_state.weight_calories_history = []
         
         for record in records:
+            # Converti peso e calorie in stringa, gestendo sia numeri che stringhe
+            peso_val = record.get('Peso', '')
+            calorie_val = record.get('Calorie', '')
+            
             entry = {
                 'data': record.get('Data'),
-                'peso': record.get('Peso', ''),
-                'calorie': record.get('Calorie', '')
+                'peso': str(peso_val) if peso_val not in ['', None] else '',
+                'calorie': str(int(calorie_val)) if calorie_val not in ['', None] else ''
             }
             st.session_state.weight_calories_history.append(entry)
         
