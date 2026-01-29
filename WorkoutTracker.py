@@ -211,10 +211,28 @@ def load_weight_calories_from_sheets():
             peso_val = record.get('Peso', '')
             calorie_val = record.get('Calorie', '')
             
+            # Gestisci il peso: se è un numero, formattalo con una cifra decimale
+            if peso_val not in ['', None]:
+                try:
+                    peso_str = f"{float(peso_val):.1f}"
+                except:
+                    peso_str = str(peso_val)
+            else:
+                peso_str = ''
+            
+            # Gestisci le calorie: converti in intero
+            if calorie_val not in ['', None]:
+                try:
+                    calorie_str = str(int(float(calorie_val)))
+                except:
+                    calorie_str = str(calorie_val)
+            else:
+                calorie_str = ''
+            
             entry = {
                 'data': record.get('Data'),
-                'peso': str(peso_val) if peso_val not in ['', None] else '',
-                'calorie': str(int(calorie_val)) if calorie_val not in ['', None] else ''
+                'peso': peso_str,
+                'calorie': calorie_str
             }
             st.session_state.weight_calories_history.append(entry)
         
