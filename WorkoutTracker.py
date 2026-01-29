@@ -996,13 +996,24 @@ elif menu == "⚖️ Peso e Calorie":
         
         st.markdown("---")
         
+        st.markdown("---")
+
         # Tabella dettagli
         st.subheader("📋 Dettagli")
         detail_data = []
         for h in reversed(history):  # Mostra dal più recente
+            # Dividi il peso per 100 anche nella tabella
+            if h['peso']:
+                try:
+                    peso_display = f"{float(h['peso']) / 100:.1f}"
+                except:
+                    peso_display = h['peso']
+            else:
+                peso_display = '-'
+            
             detail_data.append({
                 "Data": h['data'],
-                "Peso (kg)": h['peso'] if h['peso'] else '-',
+                "Peso (kg)": peso_display,
                 "Calorie": h['calorie'] if h['calorie'] else '-'
             })
         
